@@ -2,7 +2,7 @@ package timewheel
 
 import "time"
 
-var tw = New(time.Second, 3600)
+var tw = New(time.Second, 10)
 
 func init() {
 	tw.Start()

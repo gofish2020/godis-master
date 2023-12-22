@@ -27,6 +27,8 @@ type RewriteCtx struct {
 
 // Rewrite carries out AOF rewrite
 func (persister *Persister) Rewrite() error {
+
+	// 当前的aof的文件大小， tmpFile 文件句柄
 	ctx, err := persister.StartRewrite()
 	if err != nil {
 		return err
@@ -46,6 +48,8 @@ func (persister *Persister) DoRewrite(ctx *RewriteCtx) (err error) {
 	// start rewrite
 	if !config.Properties.AofUseRdbPreamble {
 		logger.Info("generate aof preamble")
+
+		// 读取当前aof文件中的内容，保存到【新】内存当中，然后再将内存中的数据保存到tmpFile中
 		err = persister.generateAof(ctx)
 	} else {
 		logger.Info("generate rdb preamble")
@@ -57,9 +61,12 @@ func (persister *Persister) DoRewrite(ctx *RewriteCtx) (err error) {
 // StartRewrite prepares rewrite procedure
 func (persister *Persister) StartRewrite() (*RewriteCtx, error) {
 	// pausing aof
+
+	// 停止操作aof
 	persister.pausingAof.Lock()
 	defer persister.pausingAof.Unlock()
 
+	// 将数据全部刷盘
 	err := persister.aofFile.Sync()
 	if err != nil {
 		logger.Warn("fsync failed")
@@ -67,6 +74,8 @@ func (persister *Persister) StartRewrite() (*RewriteCtx, error) {
 	}
 
 	// get current aof file size
+
+	// 记录下当前文件的大小
 	fileInfo, _ := os.Stat(persister.aofFilename)
 	filesize := fileInfo.Size()
 
@@ -79,7 +88,7 @@ func (persister *Persister) StartRewrite() (*RewriteCtx, error) {
 	return &RewriteCtx{
 		tmpFile:  file,
 		fileSize: filesize,
-		dbIdx:    persister.currentDB,
+		dbIdx:    persister.currentDB, /// 这个是必须要的；正常将内存数据，全部重写完到tmp aof以后，tmpFile尾部的选中的库一般是15号库
 	}, nil
 }
 
@@ -92,6 +101,8 @@ func (persister *Persister) FinishRewrite(ctx *RewriteCtx) {
 	// copy commands executed during rewriting to tmpFile
 	errOccurs := func() bool {
 		/* read write commands executed during rewriting */
+
+		// 只读打开当前的aof文件
 		src, err := os.Open(persister.aofFilename)
 		if err != nil {
 			logger.Error("open aofFilename failed: " + err.Error())
@@ -102,11 +113,14 @@ func (persister *Persister) FinishRewrite(ctx *RewriteCtx) {
 			_ = tmpFile.Close()
 		}()
 
+		// 游标移动到 文件的fileSize位置，位置后面都是在重写的过程中，新加入的数据
 		_, err = src.Seek(ctx.fileSize, 0)
 		if err != nil {
 			logger.Error("seek failed: " + err.Error())
 			return true
 		}
+
+		// 增量的aof，写入到 tmpFile中，同时选中的数据库应该是 dbIdx
 		// sync tmpFile's db index with online aofFile
 		data := protocol.MakeMultiBulkReply(utils.ToCmdLine("SELECT", strconv.Itoa(ctx.dbIdx))).ToBytes()
 		_, err = tmpFile.Write(data)
@@ -115,6 +129,8 @@ func (persister *Persister) FinishRewrite(ctx *RewriteCtx) {
 			return true
 		}
 		// copy data
+
+		// 将当前aof中的新数据 复制到tmpFile中
 		_, err = io.Copy(tmpFile, src)
 		if err != nil {
 			logger.Error("copy aof filed failed: " + err.Error())
@@ -127,11 +143,17 @@ func (persister *Persister) FinishRewrite(ctx *RewriteCtx) {
 	}
 
 	// replace current aof file by tmp file
+
+	// 关闭当前的aof
 	_ = persister.aofFile.Close()
+
+	// 将 tmpAof文件重命名为 新的当前aof
 	if err := os.Rename(tmpFile.Name(), persister.aofFilename); err != nil {
 		logger.Warn(err)
 	}
+
 	// reopen aof file for further write
+	// 重新打开新的aof，作为写入文件句柄
 	aofFile, err := os.OpenFile(persister.aofFilename, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		panic(err)

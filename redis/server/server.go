@@ -60,11 +60,14 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 		return
 	}
 
+	// 每个conn创建一个client对象 【保存到 activeConn中】
 	client := connection.NewConn(conn)
 	h.activeConn.Store(client, struct{}{})
 
+	// ParseStream内部会，启动一个协程从conn中读取数据，并发送到ch中
 	ch := parser.ParseStream(conn)
-	for payload := range ch {
+
+	for payload := range ch { // 这里可以理解为一个死循环（就是不断的从ch中读取数据，本质是从conn中读取）
 		if payload.Err != nil {
 			if payload.Err == io.EOF ||
 				payload.Err == io.ErrUnexpectedEOF ||
@@ -88,11 +91,14 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 			logger.Error("empty payload")
 			continue
 		}
+
+		// 读取到有效的 命令
 		r, ok := payload.Data.(*protocol.MultiBulkReply)
 		if !ok {
 			logger.Error("require multi bulk protocol")
 			continue
 		}
+		// r.Args请求参数； h.db 表示 *Server 对象，
 		result := h.db.Exec(client, r.Args)
 		if result != nil {
 			_, _ = client.Write(result.ToBytes())

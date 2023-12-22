@@ -1,11 +1,13 @@
 package database
 
 import (
+	"strings"
+
 	"github.com/hdt3213/godis/interface/redis"
 	"github.com/hdt3213/godis/redis/protocol"
-	"strings"
 )
 
+// 该map是一个全局的（命令）注册中心
 var cmdTable = make(map[string]*command)
 
 type command struct {

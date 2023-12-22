@@ -36,13 +36,17 @@ func fileExists(filename string) bool {
 func main() {
 	// 打印banner
 	print(banner)
-	logger.Setup(&logger.Settings{
+
+	// 初始化默认的日志打印器
+	logger.Setup(&logger.Settings{ // logs/godis-2023-02-01.log
 		Path:       "logs",
 		Name:       "godis",
 		Ext:        "log",
 		TimeFormat: "2006-01-02",
 	})
+	// *读取环境变量
 	configFilename := os.Getenv("CONFIG")
+	// *解析配置 保存到 Properties 全局变量中
 	if configFilename == "" {
 		if fileExists("redis.conf") {
 			config.SetupConfig("redis.conf")
@@ -52,9 +56,10 @@ func main() {
 	} else {
 		config.SetupConfig(configFilename)
 	}
+	// *开始启动tcp服务
 	err := tcp.ListenAndServeWithSignal(&tcp.Config{
 		Address: fmt.Sprintf("%s:%d", config.Properties.Bind, config.Properties.Port),
-	}, RedisServer.MakeHandler())
+	}, RedisServer.MakeHandler()) // RedisServer.MakeHandler() 这个相当于全局唯一的一个Handler
 	if err != nil {
 		logger.Error(err)
 	}

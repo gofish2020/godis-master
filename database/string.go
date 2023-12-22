@@ -121,13 +121,15 @@ func execGetEX(db *DB, args [][]byte) redis.Reply {
 
 // execSet sets string value and time to live to the given key
 func execSet(db *DB, args [][]byte) redis.Reply {
+	// 这里的args 格式为： key value ex/px/nx/xx 60
 	key := string(args[0])
 	value := args[1]
+
 	policy := upsertPolicy
 	ttl := unlimitedTTL
 
-	// parse options
-	if len(args) > 2 {
+	// parse options  就是为了设置 ttl和policy两个变量的值
+	if len(args) > 2 { // 说明有参数
 		for i := 2; i < len(args); i++ {
 			arg := strings.ToUpper(string(args[i]))
 			if arg == "NX" { // insert
@@ -145,16 +147,19 @@ func execSet(db *DB, args [][]byte) redis.Reply {
 					// ttl has been set
 					return &protocol.SyntaxErrReply{}
 				}
-				if i+1 >= len(args) {
+				if i+1 >= len(args) { // 说明 后面的参数没有
 					return &protocol.SyntaxErrReply{}
 				}
+				// 解析过期时间
 				ttlArg, err := strconv.ParseInt(string(args[i+1]), 10, 64)
 				if err != nil {
 					return &protocol.SyntaxErrReply{}
 				}
+				// 过期时间错误
 				if ttlArg <= 0 {
 					return protocol.MakeErrReply("ERR invalid expire time in set")
 				}
+				// 转成 ms
 				ttl = ttlArg * 1000
 				i++ // skip next arg
 			} else if arg == "PX" { // ttl in milliseconds
@@ -186,15 +191,20 @@ func execSet(db *DB, args [][]byte) redis.Reply {
 	var result int
 	switch policy {
 	case upsertPolicy:
+		// 将 key/value 保存到map中（不管是否存在）
 		db.PutEntity(key, entity)
 		result = 1
 	case insertPolicy:
+		// 如果不存在，则插入
 		result = db.PutIfAbsent(key, entity)
 	case updatePolicy:
+		// 如果存在，则更新
 		result = db.PutIfExists(key, entity)
 	}
-	if result > 0 {
+	if result > 0 { // 1表示成功 0表示啥也没做
 		if ttl != unlimitedTTL {
+
+			// 过期时间 ms
 			expireTime := time.Now().Add(time.Duration(ttl) * time.Millisecond)
 			db.Expire(key, expireTime)
 			db.addAof(CmdLine{
@@ -652,13 +662,14 @@ func execGetRange(db *DB, args [][]byte) redis.Reply {
 	return protocol.MakeBulkReply(bs[beg:end])
 }
 
-func execSetBit(db *DB, args [][]byte) redis.Reply {
-	key := string(args[0])
-	offset, err := strconv.ParseInt(string(args[1]), 10, 64)
+// SETBIT key offset value
+func execSetBit(db *DB, args [][]byte) redis.Reply { // args 表示传入的参数
+	key := string(args[0])                                   // key
+	offset, err := strconv.ParseInt(string(args[1]), 10, 64) // offset
 	if err != nil {
 		return protocol.MakeErrReply("ERR bit offset is not an integer or out of range")
 	}
-	valStr := string(args[2])
+	valStr := string(args[2]) // 1 or 0
 	var v byte
 	if valStr == "1" {
 		v = 1
@@ -671,20 +682,28 @@ func execSetBit(db *DB, args [][]byte) redis.Reply {
 	if errReply != nil {
 		return errReply
 	}
+	// 这里只是做类型转化
 	bm := bitmap.FromBytes(bs)
+	// 获取 bit位的原始数值
 	former := bm.GetBit(offset)
+	// 修改bit位的数值
 	bm.SetBit(offset, v)
+	// 保存回内存
 	db.PutEntity(key, &database.DataEntity{Data: bm.ToBytes()})
+	// 记录aof
 	db.addAof(utils.ToCmdLine3("setBit", args...))
+	// 返回客户端 之前的历史数值
 	return protocol.MakeIntReply(int64(former))
 }
 
+// GETBIT key offset
 func execGetBit(db *DB, args [][]byte) redis.Reply {
 	key := string(args[0])
 	offset, err := strconv.ParseInt(string(args[1]), 10, 64)
 	if err != nil {
 		return protocol.MakeErrReply("ERR bit offset is not an integer or out of range")
 	}
+	// 取出内存中保存的数据
 	bs, errReply := db.getAsString(key)
 	if errReply != nil {
 		return errReply
@@ -692,10 +711,13 @@ func execGetBit(db *DB, args [][]byte) redis.Reply {
 	if bs == nil {
 		return protocol.MakeIntReply(0)
 	}
+	// 转化下类型
 	bm := bitmap.FromBytes(bs)
+	// 获取offset位置的 1 or 0数值，返回给用户
 	return protocol.MakeIntReply(int64(bm.GetBit(offset)))
 }
 
+// BITCOUNT key [start end [BYTE | BIT]]
 func execBitCount(db *DB, args [][]byte) redis.Reply {
 	key := string(args[0])
 	bs, err := db.getAsString(key)
@@ -707,7 +729,7 @@ func execBitCount(db *DB, args [][]byte) redis.Reply {
 	}
 	byteMode := true
 	if len(args) > 3 {
-		mode := strings.ToLower(string(args[3]))
+		mode := strings.ToLower(string(args[3])) // 参数的第三个，是byte  / bit
 		if mode == "bit" {
 			byteMode = false
 		} else if mode == "byte" {
@@ -716,17 +738,20 @@ func execBitCount(db *DB, args [][]byte) redis.Reply {
 			return protocol.MakeErrReply("ERR syntax error")
 		}
 	}
+
 	var size int64
 	bm := bitmap.FromBytes(bs)
-	if byteMode {
-		size = int64(len(*bm))
-	} else {
-		size = int64(bm.BitSize())
+	if byteMode { // 字节模式
+		size = int64(len(*bm)) // size 有多少字节
+	} else { // 位模式
+		size = int64(bm.BitSize()) // size 有多少位
 	}
+
 	var beg, end int
-	if len(args) > 1 {
+	if len(args) > 1 { //  BITCOUNT mykey: len(args)== 1      BITCOUNT mykey 0 0 : len(args)>1
 		var err2 error
 		var startIdx, endIdx int64
+		// 获取左右边界 索引 startIdx endIdx
 		startIdx, err2 = strconv.ParseInt(string(args[1]), 10, 64)
 		if err2 != nil {
 			return protocol.MakeErrReply("ERR value is not an integer or out of range")
@@ -735,6 +760,8 @@ func execBitCount(db *DB, args [][]byte) redis.Reply {
 		if err2 != nil {
 			return protocol.MakeErrReply("ERR value is not an integer or out of range")
 		}
+
+		//
 		beg, end = utils.ConvertRange(startIdx, endIdx, size)
 		if beg < 0 {
 			return protocol.MakeIntReply(0)
@@ -743,7 +770,7 @@ func execBitCount(db *DB, args [][]byte) redis.Reply {
 	var count int64
 	if byteMode {
 		bm.ForEachByte(beg, end, func(offset int64, val byte) bool {
-			count += int64(bits.OnesCount8(val))
+			count += int64(bits.OnesCount8(val)) // 计算单个字节中有多少个bit 1
 			return true
 		})
 	} else {
@@ -757,6 +784,8 @@ func execBitCount(db *DB, args [][]byte) redis.Reply {
 	return protocol.MakeIntReply(count)
 }
 
+// 出现第一个 bit [1/0]的位置
+// BITPOS key bit [start [end [BYTE | BIT]]]
 func execBitPos(db *DB, args [][]byte) redis.Reply {
 	key := string(args[0])
 	bs, err := db.getAsString(key)
@@ -810,11 +839,14 @@ func execBitPos(db *DB, args [][]byte) redis.Reply {
 			return protocol.MakeIntReply(0)
 		}
 	}
-	if byteMode {
-		beg *= 8
+	if byteMode { // 字节模式
+		beg *= 8 // 将字节索引，转成 bit 偏移量
 		end *= 8
 	}
+
 	var offset = int64(-1)
+
+	// 找到第一个和 v相同的，就返回offset
 	bm.ForEachBit(int64(beg), int64(end), func(o int64, val byte) bool {
 		if val == v {
 			offset = o
@@ -838,6 +870,7 @@ func getRandomKey(db *DB, args [][]byte) redis.Reply {
 func init() {
 	registerCommand("Set", execSet, writeFirstKey, rollbackFirstKey, -3, flagWrite).
 		attachCommandExtra([]string{redisFlagWrite, redisFlagDenyOOM}, 1, 1, 1)
+
 	registerCommand("SetNx", execSetNX, writeFirstKey, rollbackFirstKey, 3, flagWrite).
 		attachCommandExtra([]string{redisFlagWrite, redisFlagDenyOOM, redisFlagFast}, 1, 1, 1)
 	registerCommand("SetEX", execSetEX, writeFirstKey, rollbackFirstKey, 4, flagWrite).
@@ -875,14 +908,19 @@ func init() {
 		attachCommandExtra([]string{redisFlagWrite, redisFlagDenyOOM}, 1, 1, 1)
 	registerCommand("GetRange", execGetRange, readFirstKey, nil, 4, flagReadOnly).
 		attachCommandExtra([]string{redisFlagReadonly}, 1, 1, 1)
+
 	registerCommand("SetBit", execSetBit, writeFirstKey, rollbackFirstKey, 4, flagWrite).
 		attachCommandExtra([]string{redisFlagWrite, redisFlagDenyOOM}, 1, 1, 1)
+
 	registerCommand("GetBit", execGetBit, readFirstKey, nil, 3, flagReadOnly).
 		attachCommandExtra([]string{redisFlagReadonly, redisFlagFast}, 1, 1, 1)
+
 	registerCommand("BitCount", execBitCount, readFirstKey, nil, -2, flagReadOnly).
 		attachCommandExtra([]string{redisFlagReadonly}, 1, 1, 1)
+
 	registerCommand("BitPos", execBitPos, readFirstKey, nil, -3, flagReadOnly).
 		attachCommandExtra([]string{redisFlagReadonly}, 1, 1, 1)
+
 	registerCommand("Randomkey", getRandomKey, readAllKeys, nil, 1, flagReadOnly).
 		attachCommandExtra([]string{redisFlagReadonly, redisFlagRandom}, 1, 1, 1)
 }

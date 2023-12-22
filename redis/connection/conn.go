@@ -1,11 +1,12 @@
 package connection
 
 import (
-	"github.com/hdt3213/godis/lib/logger"
-	"github.com/hdt3213/godis/lib/sync/wait"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/hdt3213/godis/lib/logger"
+	"github.com/hdt3213/godis/lib/sync/wait"
 )
 
 const (
@@ -40,7 +41,7 @@ type Connection struct {
 	txErrors []error
 
 	// selected db
-	selectedDB int
+	selectedDB int // 这里可以理解为：类似于session信息，保存当前的客户端，基于当前socket选中的db
 }
 
 var connPool = sync.Pool{

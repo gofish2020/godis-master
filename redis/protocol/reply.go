@@ -2,8 +2,9 @@ package protocol
 
 import (
 	"bytes"
-	"github.com/hdt3213/godis/interface/redis"
 	"strconv"
+
+	"github.com/hdt3213/godis/interface/redis"
 )
 
 var (
@@ -48,6 +49,23 @@ func MakeMultiBulkReply(args [][]byte) *MultiBulkReply {
 	}
 }
 
+/*
+
+网络传输的数据格式：
+set key value
+
+内部处理的数据格式：
+
+*3  // 表示有几个部分（3个）
+$3	// 表示set字符长度
+set
+$3	// 表示 key字符长度
+key
+$4	// 表示value字符长度
+value
+
+
+*/
 // ToBytes marshal redis.Reply
 func (r *MultiBulkReply) ToBytes() []byte {
 	argLen := len(r.Args)

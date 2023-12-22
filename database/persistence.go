@@ -36,7 +36,10 @@ func (server *Server) loadRdbFile() error {
 // LoadRDB real implementation of loading rdb file
 func (server *Server) LoadRDB(dec *core.Decoder) error {
 	return dec.Parse(func(o rdb.RedisObject) bool {
+
+		// 选中某个数据库
 		db := server.mustSelectDB(o.GetDBIndex())
+
 		var entity *database.DataEntity
 		switch o.GetType() {
 		case rdb.StringType:
@@ -81,6 +84,8 @@ func (server *Server) LoadRDB(dec *core.Decoder) error {
 				Data: zSet,
 			}
 		}
+
+		// 保存到数据库中
 		if entity != nil {
 			db.PutEntity(o.GetKey(), entity)
 			if o.GetExpiration() != nil {
@@ -106,9 +111,10 @@ func (server *Server) AddAof(dbIndex int, cmdLine CmdLine) {
 }
 
 func (server *Server) bindPersister(aofHandler *aof.Persister) {
+
 	server.persister = aofHandler
 	// bind SaveCmdLine
-	for _, db := range server.dbSet {
+	for _, db := range server.dbSet { // 16个数据库 ，共用 同一个aof文件
 		singleDB := db.Load().(*DB)
 		singleDB.addAof = func(line CmdLine) {
 			if config.Properties.AppendOnly { // config may be changed during runtime

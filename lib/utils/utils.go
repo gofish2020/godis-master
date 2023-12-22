@@ -63,24 +63,26 @@ func BytesEquals(a []byte, b []byte) bool {
 // both inclusive [0, 10] => left inclusive right exclusive [0, 9)
 // out of bound to max inbound [size, size+1] => [-1, -1]
 func ConvertRange(start int64, end int64, size int64) (int, int) {
-	if start < -size {
+	if start < -size { // 负数从 -1开始一直到 -size
 		return -1, -1
-	} else if start < 0 {
+	} else if start < 0 { // -1 表示 尾部的 最后一个元素 size-1
 		start = size + start
-	} else if start >= size {
+	} else if start >= size { // 正数从0 开始一直到 size-1
 		return -1, -1
 	}
-	if end < -size {
+
+	if end < -size { // 负数从 -1开始一直到 -size [-size,-1]
 		return -1, -1
-	} else if end < 0 {
+	} else if end < 0 { // end为负数，转成整数并且+1， 因为要包括end这个位置，所以+1是为了包括 end
 		end = size + end + 1
-	} else if end < size {
+	} else if end < size { // end 没有越界，end+1
 		end = end + 1
-	} else {
+	} else { // end 如果越界，直接用size
 		end = size
 	}
-	if start > end {
+	if start > end { // 最后的结果 start <= end
 		return -1, -1
 	}
+	// 这里的end不会被使用 返回的边界范围为：[start,end）
 	return int(start), int(end)
 }

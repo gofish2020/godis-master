@@ -20,7 +20,10 @@ const (
 
 // DB stores data and execute user's commands
 type DB struct {
+
+	// 表示数据库编号
 	index int
+
 	// key -> DataEntity
 	data *dict.ConcurrentDict
 	// key -> expireTime (time.Time)
@@ -74,6 +77,11 @@ func makeBasicDB() *DB {
 }
 
 // Exec executes command within one database
+
+/*
+c 客户端网络连接
+cmdLine 客户端发过来的（待执行）命令
+*/
 func (db *DB) Exec(c redis.Connection, cmdLine [][]byte) redis.Reply {
 	// transaction control commands and other commands which cannot execute within transaction
 	cmdName := strings.ToLower(string(cmdLine[0]))
@@ -102,15 +110,21 @@ func (db *DB) Exec(c redis.Connection, cmdLine [][]byte) redis.Reply {
 		return EnqueueCmd(c, cmdLine)
 	}
 
+	// 如果是普通的 command ，在这里执行
 	return db.execNormalCommand(cmdLine)
 }
 
+// 如果是普通的 command ，在这里执行
 func (db *DB) execNormalCommand(cmdLine [][]byte) redis.Reply {
 	cmdName := strings.ToLower(string(cmdLine[0]))
+
+	// 从命令注册中心，获取 命令对象 cmd
 	cmd, ok := cmdTable[cmdName]
 	if !ok {
 		return protocol.MakeErrReply("ERR unknown command '" + cmdName + "'")
 	}
+
+	// 对命令的参数个数进行 校验
 	if !validateArity(cmd.arity, cmdLine) {
 		return protocol.MakeArgNumErrReply(cmdName)
 	}
@@ -118,7 +132,11 @@ func (db *DB) execNormalCommand(cmdLine [][]byte) redis.Reply {
 	prepare := cmd.prepare
 	write, read := prepare(cmdLine[1:])
 	db.addVersion(write...)
+
+	// 一堆的keys，肯定是要【读/写】到不同的shard中的，对不同的shard上的锁肯定也是不同的
+	// 这里相当于对shard上锁
 	db.RWLocks(write, read)
+	// 这里对shard解锁
 	defer db.RWUnLocks(write, read)
 	fun := cmd.executor
 	return fun(db, cmdLine[1:])
@@ -190,10 +208,15 @@ func (db *DB) PutIfAbsent(key string, entity *database.DataEntity) int {
 
 // Remove the given key from db
 func (db *DB) Remove(key string) {
+
+	// 从 data中删除
 	raw, deleted := db.data.RemoveWithLock(key)
+	// 从 ttlMap中删除
 	db.ttlMap.Remove(key)
+	// 从时间轮中删除任务
 	taskKey := genExpireTask(key)
 	timewheel.Cancel(taskKey)
+
 	if cb := db.deleteCallback; cb != nil {
 		var entity *database.DataEntity
 		if deleted > 0 {
@@ -244,21 +267,32 @@ func genExpireTask(key string) string {
 
 // Expire sets ttlCmd of key
 func (db *DB) Expire(key string, expireTime time.Time) {
+
+	// 在ttlMap中设置key的过期时间
 	db.ttlMap.Put(key, expireTime)
+
+	// 获取过期key 字符串
 	taskKey := genExpireTask(key)
+
+	// 设置延迟任务，在expireTime的时候，执行回调函数，
 	timewheel.At(expireTime, taskKey, func() {
 		keys := []string{key}
+
+		// 锁定shard
 		db.RWLocks(keys, nil)
 		defer db.RWUnLocks(keys, nil)
 		// check-lock-check, ttl may be updated during waiting lock
 		logger.Info("expire " + key)
-		rawExpireTime, ok := db.ttlMap.Get(key)
+		rawExpireTime, ok := db.ttlMap.Get(key) // 所以这里额外读取了一次当前保存的真实的过期时间
 		if !ok {
 			return
 		}
+		// 比如时间轮为1s时间轮到期执行，但是用户可能又修改了到期时间为3s后
 		expireTime, _ := rawExpireTime.(time.Time)
-		expired := time.Now().After(expireTime)
+		expired := time.Now().After(expireTime) // 所以虽然回调任务要执行，但是是不能删除的
 		if expired {
+
+			// 确实过期了
 			db.Remove(key)
 		}
 	})

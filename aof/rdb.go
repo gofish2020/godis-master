@@ -97,6 +97,8 @@ func (persister *Persister) startGenerateRDB(newListener Listener, hook func()) 
 // generateRDB generates rdb file from aof file
 func (persister *Persister) generateRDB(ctx *RewriteCtx) error {
 	// load aof tmpFile
+
+	// 从 aof文件中加载数据到内存中
 	tmpHandler := persister.newRewriteHandler()
 	tmpHandler.LoadAof(int(ctx.fileSize))
 

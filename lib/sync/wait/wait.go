@@ -28,12 +28,16 @@ func (w *Wait) Wait() {
 // WaitWithTimeout blocks until the WaitGroup counter is zero or timeout
 // returns true if timeout
 func (w *Wait) WaitWithTimeout(timeout time.Duration) bool {
+
+	// 这里c是有缓冲的，避免goroutine泄漏
 	c := make(chan struct{}, 1)
 	go func() {
 		defer close(c)
 		w.Wait()
-		c <- struct{}{}
+		c <- struct{}{} // 因为如果 虾米啊的select先执行完成，就没有 <-c 从c中读取数据，这个时候c又是没有缓冲的，那么这里一定一直阻塞，goroutine就永远无法停止
 	}()
+
+	// 要么c 成功 or 超时退出
 	select {
 	case <-c:
 		return false // completed normally

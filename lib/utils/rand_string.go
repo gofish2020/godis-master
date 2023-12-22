@@ -12,6 +12,7 @@ var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345
 func RandString(n int) string {
 	b := make([]rune, n)
 	for i := range b {
+		// 从 letters中随机 获取一个字符，保存到 b[i]
 		b[i] = letters[r.Intn(len(letters))]
 	}
 	return string(b)

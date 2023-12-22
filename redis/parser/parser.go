@@ -4,13 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
-	"github.com/hdt3213/godis/interface/redis"
-	"github.com/hdt3213/godis/lib/logger"
-	"github.com/hdt3213/godis/redis/protocol"
 	"io"
 	"runtime/debug"
 	"strconv"
 	"strings"
+
+	"github.com/hdt3213/godis/interface/redis"
+	"github.com/hdt3213/godis/lib/logger"
+	"github.com/hdt3213/godis/redis/protocol"
 )
 
 // Payload stores redis.Reply or error
@@ -59,14 +60,20 @@ func ParseOne(data []byte) (redis.Reply, error) {
 	return payload.Data, payload.Err
 }
 
+// parse0函数有两个用处：一个是从网络fd中读取数据解析，一个是从aof文件中读取数据解析
 func parse0(rawReader io.Reader, ch chan<- *Payload) {
+
+	// 异常恢复
 	defer func() {
 		if err := recover(); err != nil {
 			logger.Error(err, string(debug.Stack()))
 		}
 	}()
+
+	// bufio.NewReader 就是一个包装rawReader的读取器
 	reader := bufio.NewReader(rawReader)
 	for {
+		// 读到 \n 就结束 （ \n相当于分隔符）
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			ch <- &Payload{Err: err}
@@ -74,13 +81,17 @@ func parse0(rawReader io.Reader, ch chan<- *Payload) {
 			return
 		}
 		length := len(line)
+		// 读取到空白行，忽略
 		if length <= 2 || line[length-2] != '\r' {
 			// there are some empty lines within replication traffic, ignore this error
 			//protocolError(ch, "empty line")
 			continue
 		}
+		// 去掉尾部的 \r 和 \n
 		line = bytes.TrimSuffix(line, []byte{'\r', '\n'})
 		switch line[0] {
+
+		// 这一块的目的，为了解析 aof文件格式
 		case '+':
 			content := string(line[1:])
 			ch <- &Payload{
@@ -122,6 +133,9 @@ func parse0(rawReader io.Reader, ch chan<- *Payload) {
 				return
 			}
 		default:
+
+			// 这里才是从网络中读取的数据包，组装
+			// set key value
 			args := bytes.Split(line, []byte{' '})
 			ch <- &Payload{
 				Data: protocol.MakeMultiBulkReply(args),
@@ -169,12 +183,27 @@ func parseRDBBulkString(reader *bufio.Reader, ch chan<- *Payload) error {
 		return err
 	}
 	ch <- &Payload{
-		Data: protocol.MakeBulkReply(body[:len(body)]),
+		Data: protocol.MakeBulkReply(body[:]),
 	}
 	return nil
 }
 
+/*
+
+
+*3  // 表示有几个部分（3个）
+$3	// 表示set字符长度
+set
+$3	// 表示 key字符长度
+key
+$4	// 表示value字符长度
+value
+
+*/
+
 func parseArray(header []byte, reader *bufio.Reader, ch chan<- *Payload) error {
+
+	// 参考上面： 解析出 *3 中的数字3
 	nStrs, err := strconv.ParseInt(string(header[1:]), 10, 64)
 	if err != nil || nStrs < 0 {
 		protocolError(ch, "illegal array header "+string(header[1:]))
@@ -185,18 +214,24 @@ func parseArray(header []byte, reader *bufio.Reader, ch chan<- *Payload) error {
 		}
 		return nil
 	}
+	//
 	lines := make([][]byte, 0, nStrs)
 	for i := int64(0); i < nStrs; i++ {
+
+		// 继续读取一行
 		var line []byte
 		line, err = reader.ReadBytes('\n')
 		if err != nil {
 			return err
 		}
+		// 结果为 $3
 		length := len(line)
 		if length < 4 || line[length-2] != '\r' || line[0] != '$' {
 			protocolError(ch, "illegal bulk string header "+string(line))
 			break
 		}
+
+		// 解析出 $3 中的数字 3
 		strLen, err := strconv.ParseInt(string(line[1:length-2]), 10, 64)
 		if err != nil || strLen < -1 {
 			protocolError(ch, "illegal bulk string length "+string(line))
@@ -204,14 +239,19 @@ func parseArray(header []byte, reader *bufio.Reader, ch chan<- *Payload) error {
 		} else if strLen == -1 {
 			lines = append(lines, []byte{})
 		} else {
+
+			// 继续读取 3+2 长度的字符 ，3 表示有效字符长度 2表示\r\n 两个
 			body := make([]byte, strLen+2)
 			_, err := io.ReadFull(reader, body)
 			if err != nil {
 				return err
 			}
+			// 这里去掉尾部的 \r\n, 得到set
 			lines = append(lines, body[:len(body)-2])
 		}
 	}
+
+	// 这里就是最终的结果 set key value
 	ch <- &Payload{
 		Data: protocol.MakeMultiBulkReply(lines),
 	}

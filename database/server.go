@@ -48,17 +48,24 @@ func fileExists(filename string) bool {
 // NewStandaloneServer creates a standalone redis server, with multi database and all other funtions
 func NewStandaloneServer() *Server {
 	server := &Server{}
+
+	// 默认有16个数据库
 	if config.Properties.Databases == 0 {
 		config.Properties.Databases = 16
 	}
-	// creat tmp dir
+	// create tmp dir
 	err := os.MkdirAll(config.GetTmpDir(), os.ModePerm)
 	if err != nil {
 		panic(fmt.Errorf("create tmp dir failed: %v", err))
 	}
 	// make db set
+
+	// 有config.Properties.Databases个数据库，每个数据库有个编号index,
+	// 每个数据库的底层其实是一个多个分片的map
 	server.dbSet = make([]*atomic.Value, config.Properties.Databases)
 	for i := range server.dbSet {
+
+		// 创建数据库对象
 		singleDB := makeDB()
 		singleDB.index = i
 		holder := &atomic.Value{}
@@ -75,8 +82,12 @@ func NewStandaloneServer() *Server {
 		if err != nil {
 			panic(err)
 		}
+
+		//  aof文件句柄，保存在Server中，同时 16个数据库，都使用同一个aof文件
 		server.bindPersister(aofHandler)
 	}
+
+	// 如果 aof没有加载，就加载rdb（这两个应该是互斥的），只会加载一个恢复内存
 	if config.Properties.RDBFilename != "" && !validAof {
 		// load rdb
 		err := server.loadRdbFile()
@@ -101,6 +112,7 @@ func (server *Server) Exec(c redis.Connection, cmdLine [][]byte) (result redis.R
 		}
 	}()
 
+	// 提取命令：名称
 	cmdName := strings.ToLower(string(cmdLine[0]))
 	// ping
 	if cmdName == "ping" {
@@ -148,10 +160,11 @@ func (server *Server) Exec(c redis.Connection, cmdLine [][]byte) (result redis.R
 		return pubsub.Publish(server.hub, cmdLine[1:])
 	} else if cmdName == "unsubscribe" {
 		return pubsub.UnSubscribe(server.hub, c, cmdLine[1:])
-	} else if cmdName == "bgrewriteaof" {
+	} else if cmdName == "bgrewriteaof" { // 先定一个新的内存对象，然后加载aof文件，到内存中，最后将内存的数据，保存会tmpAof中，同时将aof中增量的命令也保存到tmpAof中，此时的tmpAof就是全量的数据
 		if !config.Properties.AppendOnly {
 			return protocol.MakeErrReply("AppendOnly is false, you can't rewrite aof file")
 		}
+
 		// aof.go imports router.go, router.go cannot import BGRewriteAOF from aof.go
 		return BGRewriteAOF(server, cmdLine[1:])
 	} else if cmdName == "rewriteaof" {
@@ -173,7 +186,7 @@ func (server *Server) Exec(c redis.Connection, cmdLine [][]byte) (result redis.R
 		return SaveRDB(server, cmdLine[1:])
 	} else if cmdName == "bgsave" {
 		return BGSaveRDB(server, cmdLine[1:])
-	} else if cmdName == "select" {
+	} else if cmdName == "select" { // 表示当前的 client连接，在哪个db下执行后序的操作命令（这个类似于服务端记录session信息的行为）
 		if c != nil && c.InMultiState() {
 			return protocol.MakeErrReply("cannot select database within multi")
 		}
@@ -194,11 +207,17 @@ func (server *Server) Exec(c redis.Connection, cmdLine [][]byte) (result redis.R
 	// todo: support multi database transaction
 
 	// normal commands
+
+	// 当前连接要选中哪个数据库
 	dbIndex := c.GetDBIndex()
+	// 这里相当于返回 该数据库对象
 	selectedDB, errReply := server.selectDB(dbIndex)
 	if errReply != nil {
 		return errReply
 	}
+
+	// 【1个server -> 多个 db】 -> 【每个db -> 多个shard 】 -> 每个shard 就是底层的存储结构（锁 + map 构成）
+	// 在选中的数据库中，执行命令
 	return selectedDB.Exec(c, cmdLine)
 }
 
@@ -287,6 +306,7 @@ func (server *Server) mustSelectDB(dbIndex int) *DB {
 
 // ForEach traverses all the keys in the given database
 func (server *Server) ForEach(dbIndex int, cb func(key string, data *database.DataEntity, expiration *time.Time) bool) {
+	// 选中某个db，遍历其中的shard
 	server.mustSelectDB(dbIndex).ForEach(cb)
 }
 

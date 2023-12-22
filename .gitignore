@@ -22,3 +22,5 @@ logs
 *.iml
 redis2.conf
 
+
+.VSCodeCounter

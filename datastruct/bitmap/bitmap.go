@@ -46,16 +46,20 @@ func (b *BitMap) SetBit(offset int64, val byte) {
 		(*b)[byteIndex] |= mask
 	} else {
 		// clear bit
-		(*b)[byteIndex] &^= mask
+		(*b)[byteIndex] &^= mask // a &^ = mask   a = a & (a ^ mask) = (a & a) ^ (a & mask) = a ^ ( 如果a=1 -> 1 如果 a=0 -> 0) = 1 ^1 or 0 ^ 0 = 结果都是 0
 	}
 }
 
+// 这里存在一个认知误区： bitOffset的方向是：单个字节（从右到左）
+// byteIndex 的方向：（从左到右）
+// 这里的第几都是从0开始的第几
 func (b *BitMap) GetBit(offset int64) byte {
-	byteIndex := offset / 8
-	bitOffset := offset % 8
+	byteIndex := offset / 8 // 表示第几个字节
+	bitOffset := offset % 8 // 表示 某个字节的第几个bit
 	if byteIndex >= int64(len(*b)) {
 		return 0
 	}
+	// (*b)[byteIndex] 表示字节,  bit位的低位在字节的右边（非左边）
 	return ((*b)[byteIndex] >> bitOffset) & 0x01
 }
 
@@ -67,19 +71,32 @@ func (b *BitMap) ForEachBit(begin int64, end int64, cb Callback) {
 	bitOffset := offset % 8
 	for byteIndex < int64(len(*b)) {
 		b := (*b)[byteIndex]
+
+		// 本字节的bit偏移量（从右向左）
 		for bitOffset < 8 {
+
 			bit := byte(b >> bitOffset & 0x01)
+
+			// 该bit和 预期值相同
 			if !cb(offset, bit) {
 				return
 			}
+			// 继续本字节的下一个bit位
 			bitOffset++
+			// 这个是记录当前bit的实际偏移位置，用作结果返回
 			offset++
+
+			// 如果超过end
 			if offset >= end && end != 0 {
-				break
+				break // 这里应该直接return即可
 			}
 		}
+
+		// 下一个字节
 		byteIndex++
+		// 下一个字节 的bit偏移位置
 		bitOffset = 0
+		// 
 		if end > 0 && offset >= end {
 			break
 		}

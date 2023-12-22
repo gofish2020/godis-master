@@ -38,14 +38,20 @@ func computeCapacity(param int) (size int) {
 }
 
 // MakeConcurrent creates ConcurrentDict with the given shard count
+
 func MakeConcurrent(shardCount int) *ConcurrentDict {
 	shardCount = computeCapacity(shardCount)
+
+	//  分片的个数
 	table := make([]*shard, shardCount)
+
 	for i := 0; i < shardCount; i++ {
 		table[i] = &shard{
 			m: make(map[string]interface{}),
 		}
 	}
+
+	// 有 shardCount个分片的 字典（map）
 	d := &ConcurrentDict{
 		count:      0,
 		table:      table,
@@ -65,6 +71,7 @@ func fnv32(key string) uint32 {
 	return hash
 }
 
+// 利用计算出来的hashCode，计算 当前key属于哪个【分片】
 func (dict *ConcurrentDict) spread(hashCode uint32) uint32 {
 	if dict == nil {
 		panic("dict is nil")
@@ -118,9 +125,14 @@ func (dict *ConcurrentDict) Put(key string, val interface{}) (result int) {
 	if dict == nil {
 		panic("dict is nil")
 	}
+	// key 计算hashCode
 	hashCode := fnv32(key)
+	// 计算该hashCode属于哪个分片索引
 	index := dict.spread(hashCode)
+
+	// 获取该分片 对象 *shard
 	s := dict.getShard(index)
+	// 上锁（因为是put，所以是 写锁）
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -128,6 +140,7 @@ func (dict *ConcurrentDict) Put(key string, val interface{}) (result int) {
 		s.m[key] = val
 		return 0
 	}
+	// 字典中，key的数量
 	dict.addCount()
 	s.m[key] = val
 	return 1
@@ -245,11 +258,13 @@ func (dict *ConcurrentDict) RemoveWithLock(key string) (val interface{}, result 
 	index := dict.spread(hashCode)
 	s := dict.getShard(index)
 
+	// 删除 & 个数 -1
 	if val, ok := s.m[key]; ok {
 		delete(s.m, key)
 		dict.decreaseCount()
 		return val, 1
 	}
+	// 返回被删除的 value
 	return val, 0
 }
 
@@ -377,20 +392,30 @@ func (dict *ConcurrentDict) Clear() {
 	*dict = *MakeConcurrent(dict.shardCount)
 }
 
+// 核心：就是将 keys会落到哪些分片的（编号），进行排序。也就是对分片（编号）进行排序；
 func (dict *ConcurrentDict) toLockIndices(keys []string, reverse bool) []uint32 {
 	indexMap := make(map[uint32]struct{})
 	for _, key := range keys {
+
+		// 就是计算key 应该放到哪个分片中
 		index := dict.spread(fnv32(key))
+
+		// indexMap 表示用的分片编号
 		indexMap[index] = struct{}{}
 	}
+
+	// 将所有的分片编号，保存到 indices中
 	indices := make([]uint32, 0, len(indexMap))
 	for index := range indexMap {
 		indices = append(indices, index)
 	}
+
+	// 对indices排序
 	sort.Slice(indices, func(i, j int) bool {
-		if !reverse {
+		if !reverse { // 正序
 			return indices[i] < indices[j]
 		}
+		// 倒序
 		return indices[i] > indices[j]
 	})
 	return indices
@@ -401,16 +426,26 @@ func (dict *ConcurrentDict) RWLocks(writeKeys []string, readKeys []string) {
 	keys := append(writeKeys, readKeys...)
 	indices := dict.toLockIndices(keys, false)
 	writeIndexSet := make(map[uint32]struct{})
+
+	// 将writeKeys 的分片编号，保存到 writeIndexSet 中
 	for _, wKey := range writeKeys {
 		idx := dict.spread(fnv32(wKey))
 		writeIndexSet[idx] = struct{}{}
 	}
+
+	// indices是所有的分片编号
 	for _, index := range indices {
+
+		// writeIndexSet 仅仅是写入的分片编号
 		_, w := writeIndexSet[index]
+
+		// 获取分片的锁
 		mu := &dict.table[index].mutex
-		if w {
+
+		// 决定该锁，是读锁/还是写锁
+		if w { // 如果 写key也要到该分片，就是写锁
 			mu.Lock()
-		} else {
+		} else { // 如果仅仅是读key用到该分片，就是读锁
 			mu.RLock()
 		}
 	}
