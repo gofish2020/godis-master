@@ -3,6 +3,8 @@ package cluster
 import (
 	"errors"
 	"fmt"
+	"net"
+
 	"github.com/hdt3213/godis/config"
 	"github.com/hdt3213/godis/datastruct/dict"
 	"github.com/hdt3213/godis/interface/redis"
@@ -12,7 +14,6 @@ import (
 	"github.com/hdt3213/godis/redis/client"
 	"github.com/hdt3213/godis/redis/parser"
 	"github.com/hdt3213/godis/redis/protocol"
-	"net"
 )
 
 type defaultClientFactory struct {
@@ -27,7 +28,7 @@ var connectionPoolConfig = pool.Config{
 // GetPeerClient gets a client with peer form pool
 func (factory *defaultClientFactory) GetPeerClient(peerAddr string) (peerClient, error) {
 	var connectionPool *pool.Pool
-	raw, ok := factory.nodeConnections.Get(peerAddr)
+	raw, ok := factory.nodeConnections.Get(peerAddr) // 保存的是 ip地址和 连接池对象
 	if !ok {
 		creator := func() (interface{}, error) {
 			c, err := client.MakeClient(peerAddr)

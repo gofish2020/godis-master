@@ -40,21 +40,29 @@ func (db *DB) getOrInitSortedSet(key string) (sortedSet *SortedSet.SortedSet, in
 	return sortedSet, inited, nil
 }
 
+// ZADD key [NX | XX] [GT | LT] [CH] [INCR] score member [score member...]
 // execZAdd adds member into sorted set
 func execZAdd(db *DB, args [][]byte) redis.Reply {
+
+	// 不是2的整数倍
 	if len(args)%2 != 1 {
 		return protocol.MakeSyntaxErrReply()
 	}
 	key := string(args[0])
-	size := (len(args) - 1) / 2
+	size := (len(args) - 1) / 2 // 这个1表示 key这个参数
+
+	// 表示 score/member的对数（有多少对）
 	elements := make([]*SortedSet.Element, size)
 	for i := 0; i < size; i++ {
+
 		scoreValue := args[2*i+1]
 		member := string(args[2*i+2])
 		score, err := strconv.ParseFloat(string(scoreValue), 64)
 		if err != nil {
 			return protocol.MakeErrReply("ERR value is not a valid float")
 		}
+
+		// 找到一对 score/member 保存到 elements 中
 		elements[i] = &SortedSet.Element{
 			Member: member,
 			Score:  score,
@@ -89,6 +97,7 @@ func undoZAdd(db *DB, args [][]byte) []CmdLine {
 	return rollbackZSetFields(db, key, fields...)
 }
 
+// / ZSCORE key member
 // execZScore gets score of a member in sortedset
 func execZScore(db *DB, args [][]byte) redis.Reply {
 	// parse args
@@ -111,6 +120,7 @@ func execZScore(db *DB, args [][]byte) redis.Reply {
 	return protocol.MakeBulkReply([]byte(value))
 }
 
+// ZRank key member [withscore]
 // execZRank gets index of a member in sortedset, ascending order, start from 0
 func execZRank(db *DB, args [][]byte) redis.Reply {
 	// parse args

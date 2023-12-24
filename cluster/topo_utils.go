@@ -26,6 +26,8 @@ func (cluster *Cluster) setImportedKey(key string) {
 func (cluster *Cluster) initSlot(slotId uint32, state uint32) {
 	cluster.slotMu.Lock()
 	defer cluster.slotMu.Unlock()
+
+	// 16384个槽 [0,16383]
 	cluster.slots[slotId] = &hostSlot{
 		importedKeys: set.Make(),
 		keys:         set.Make(),

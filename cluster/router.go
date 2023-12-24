@@ -1,8 +1,9 @@
 package cluster
 
 import (
-	"github.com/hdt3213/godis/interface/redis"
 	"strings"
+
+	"github.com/hdt3213/godis/interface/redis"
 )
 
 // CmdLine is alias for [][]byte, represents a command line
@@ -22,7 +23,7 @@ func registerDefaultCmd(name string) {
 // relay command to responsible peer, and return its protocol to client
 func defaultFunc(cluster *Cluster, c redis.Connection, args [][]byte) redis.Reply {
 	key := string(args[1])
-	slotId := getSlot(key)
+	slotId := getSlot(key) // 计算key所属的hash slot
 	peer := cluster.pickNode(slotId)
 	if peer.ID == cluster.self {
 		err := cluster.ensureKeyWithoutLock(key)

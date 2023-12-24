@@ -4,14 +4,17 @@ import (
 	"strconv"
 )
 
+// zadd key score member
+
 // SortedSet is a set which keys sorted by bound score
 type SortedSet struct {
 	dict     map[string]*Element
-	skiplist *skiplist
+	skiplist *skiplist // 本身的 skiplist并没有去重能力
 }
 
 // Make makes a new SortedSet
 func Make() *SortedSet {
+
 	return &SortedSet{
 		dict:     make(map[string]*Element),
 		skiplist: makeSkiplist(),
@@ -25,11 +28,18 @@ func (sortedSet *SortedSet) Add(member string, score float64) bool {
 		Member: member,
 		Score:  score,
 	}
+
+	// 说明已经存在相同的member
 	if ok {
 		if score != element.Score {
+
+			// 否则，就先移除 member和score
 			sortedSet.skiplist.remove(member, element.Score)
+			// 然后再插入 member 和 score
 			sortedSet.skiplist.insert(member, score)
 		}
+
+		// 如果分值一样，说明重复，啥也做
 		return false
 	}
 	sortedSet.skiplist.insert(member, score)
@@ -43,6 +53,8 @@ func (sortedSet *SortedSet) Len() int64 {
 
 // Get returns the given member
 func (sortedSet *SortedSet) Get(member string) (element *Element, ok bool) {
+
+	// 直接读取map
 	element, ok = sortedSet.dict[member]
 	if !ok {
 		return nil, false
@@ -61,12 +73,14 @@ func (sortedSet *SortedSet) Remove(member string) bool {
 	return false
 }
 
-// GetRank returns the rank of the given member, sort by ascending order, rank starts from 0
+// GetRank returns the rank of the given member, sort by ascending order, 【rank starts from 0】
 func (sortedSet *SortedSet) GetRank(member string, desc bool) (rank int64) {
 	element, ok := sortedSet.dict[member]
 	if !ok {
 		return -1
 	}
+
+	// 获取排序？？？
 	r := sortedSet.skiplist.getRank(member, element.Score)
 	if desc {
 		r = sortedSet.skiplist.length - r

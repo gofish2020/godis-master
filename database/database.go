@@ -106,6 +106,8 @@ func (db *DB) Exec(c redis.Connection, cmdLine [][]byte) redis.Reply {
 		}
 		return Watch(db, c, cmdLine[1:])
 	}
+
+	//暂存的命令队列
 	if c != nil && c.InMultiState() {
 		return EnqueueCmd(c, cmdLine)
 	}

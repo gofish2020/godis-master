@@ -3,10 +3,22 @@ package sortedset
 import (
 	"math/bits"
 	"math/rand"
+	"time"
 )
 
+/*
+每个层级的节点，都有forward 和span
+
+	if forward == nil {
+		span = 当前节点到尾部节点到跨度
+	} else if forward != nil {
+		span = 当前节点 到 forward 节点到跨度
+	}
+
+update 的含义： 限制在skiplist.level层级， 要查找的某个节点的的前驱节点，这个节点 甚至和当前节点没有指向关系
+*/
 const (
-	maxLevel = 16
+	maxLevel = 16 // 默认最高层级位16
 )
 
 // Element is a key-score pair
@@ -30,18 +42,24 @@ type node struct {
 type skiplist struct {
 	header *node
 	tail   *node
-	length int64
+	length int64 // 记录其中的节点个数
 	level  int16
 }
 
 func makeNode(level int16, score float64, member string) *node {
+
+	// 创建新节点
 	n := &node{
+
+		// 节点保存的值 score/member
 		Element: Element{
 			Score:  score,
 			Member: member,
 		},
+		// 节点的层数组
 		level: make([]*Level, level),
 	}
+	// 初始化每一层的Level值
 	for i := range n.level {
 		n.level[i] = new(Level)
 	}
@@ -51,23 +69,42 @@ func makeNode(level int16, score float64, member string) *node {
 func makeSkiplist() *skiplist {
 	return &skiplist{
 		level:  1,
-		header: makeNode(maxLevel, 0, ""),
+		header: makeNode(maxLevel, 0, ""), // header节点
 	}
 }
 
 func randomLevel() int16 {
-	total := uint64(1)<<uint64(maxLevel) - 1
+
+	// 1 << maxLevel = 2^16 = 65536
+	total := uint64(1)<<uint64(maxLevel) - 1 // 0x 00 00 00 00 00 00 FF FF = bits 64位
+	rand.Seed(int64(time.Now().Nanosecond()))
+	// [0,0xFFFF-0x0001]
 	k := rand.Uint64() % total
+
+	// k+1 = [1,0xFFFF] int16(bits.Len64(k+1)) 最小1位，最大16位 maxLevel - int16(bits.Len64(k+1) = [0,15] + 1 = [1,16]
 	return maxLevel - int16(bits.Len64(k+1)) + 1
 }
 
 func (skiplist *skiplist) insert(member string, score float64) *node {
+
 	update := make([]*node, maxLevel) // link new node with node in `update`
 	rank := make([]int64, maxLevel)
 
 	// find position to insert
+
+	// node 表示当前指向的节点
 	node := skiplist.header
+
+	// 这个for循环的目的在于不断的【向下移动】
 	for i := skiplist.level - 1; i >= 0; i-- {
+
+		/*
+			i 表示层高
+			rank表示i层横向的距离
+			update 表示i层最右边的节点
+		*/
+
+		// rank的含义表示从最左边的边界header边界，到当前node的，在i层级上的跨度（这个跨度是从header到node的跨度，总跨度）
 		if i == skiplist.level-1 {
 			rank[i] = 0
 		} else {
@@ -75,20 +112,36 @@ func (skiplist *skiplist) insert(member string, score float64) *node {
 		}
 		if node.level[i] != nil {
 			// traverse the skip list
+
+			/*
+				继续（当前节点的）下一层的条件为：
+				1.当前节点【没有】后缀节点；
+				2.当前节点【有】  后缀节点； 分值很大 or 分值相同，但是member比较大
+			*/
+			// for循环的目的：在于不断的【向右移动】
 			for node.level[i].forward != nil &&
+				//后缀节点的分值 偏小
 				(node.level[i].forward.Score < score ||
+					// 后缀节点分值一样，但是 member 偏小
 					(node.level[i].forward.Score == score && node.level[i].forward.Member < member)) { // same score, different key
 				rank[i] += node.level[i].span
+				// 当前节点，（设定为：同一层的后缀节点）
 				node = node.level[i].forward
 			}
 		}
+		// rank[i] 层i的最右边节点的跨度
+		// 层i的最右边的节点
 		update[i] = node
 	}
+	// 都表示某一层的最右边的一个节点
+	// rank，从header到当前节点update的距离
+	// update
 
-	level := randomLevel()
+	level := randomLevel() // 随机层高
 	// extend skiplist level
-	if level > skiplist.level {
-		for i := skiplist.level; i < level; i++ {
+	if level > skiplist.level { // 如果新节点的层高比现有的最高还要高
+		for i := skiplist.level; i < level; i++ { // 超过的层高部分
+			// 前驱节点就是header
 			rank[i] = 0
 			update[i] = skiplist.header
 			update[i].level[i].span = skiplist.length
@@ -97,32 +150,45 @@ func (skiplist *skiplist) insert(member string, score float64) *node {
 	}
 
 	// make node and link into skiplist
+
+	// 这里的node节点就是即将插入的新节点
 	node = makeNode(level, score, member)
 	for i := int16(0); i < level; i++ {
+
+		// 这里用链表的思路理解
 		node.level[i].forward = update[i].level[i].forward
 		update[i].level[i].forward = node
 
-		// update span covered by update[i] as node is inserted here
+		// rank[0] - rank[i] 表示 update[0]和update[1]两个节点之间的距离
+		// update[i].level[i].span  表示 update[1]节点到后驱节点到距离
+		// 相减的结果，表示 update[0]节点到后序节点到距离，而插入到node位置恰好就是 update[0]的位置
 		node.level[i].span = update[i].level[i].span - (rank[0] - rank[i])
+
 		update[i].level[i].span = (rank[0] - rank[i]) + 1
 	}
 
 	// increment span for untouched levels
+
+	// 如果level的层高比较低，小于最大层高，那么多余的层高（skiplist.level - level) 因为插入了新元素，默认都要自动增减span+1
 	for i := level; i < skiplist.level; i++ {
 		update[i].level[i].span++
 	}
 
-	// set backward node
+	// node的backword 之前 前面的节点的节点
 	if update[0] == skiplist.header {
 		node.backward = nil
 	} else {
 		node.backward = update[0]
 	}
+
+	// 将node的后面一个节点的backward指向node
 	if node.level[0].forward != nil {
 		node.level[0].forward.backward = node
 	} else {
 		skiplist.tail = node
 	}
+
+	// 因为新插入节点
 	skiplist.length++
 	return node
 }
@@ -131,7 +197,11 @@ func (skiplist *skiplist) insert(member string, score float64) *node {
  * param node: node to delete
  * param update: backward node (of target)
  */
+
+// 要删除节点node，update 保存的是节点node前面的节点列表
+
 func (skiplist *skiplist) removeNode(node *node, update []*node) {
+
 	for i := int16(0); i < skiplist.level; i++ {
 		if update[i].level[i].forward == node {
 			update[i].level[i].span += node.level[i].span - 1
@@ -161,15 +231,21 @@ func (skiplist *skiplist) remove(member string, score float64) bool {
 	 */
 	update := make([]*node, maxLevel)
 	node := skiplist.header
+
+	// 找到所有的前缀节点（该节点可能和 member并没有直接的指向关系）
 	for i := skiplist.level - 1; i >= 0; i-- {
+
+		// 在每个层级，找到满足比member小的第一个节点
 		for node.level[i].forward != nil &&
 			(node.level[i].forward.Score < score ||
 				(node.level[i].forward.Score == score &&
 					node.level[i].forward.Member < member)) {
 			node = node.level[i].forward
 		}
+
 		update[i] = node
 	}
+
 	node = node.level[0].forward
 	if node != nil && score == node.Score && node.Member == member {
 		skiplist.removeNode(node, update)
@@ -185,6 +261,7 @@ func (skiplist *skiplist) remove(member string, score float64) bool {
 func (skiplist *skiplist) getRank(member string, score float64) int64 {
 	var rank int64 = 0
 	x := skiplist.header
+
 	for i := skiplist.level - 1; i >= 0; i-- {
 		for x.level[i].forward != nil &&
 			(x.level[i].forward.Score < score ||

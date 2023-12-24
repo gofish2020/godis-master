@@ -1,10 +1,13 @@
 package database
 
 import (
+	"strings"
+
 	"github.com/hdt3213/godis/interface/redis"
 	"github.com/hdt3213/godis/redis/protocol"
-	"strings"
 )
+
+// WATCH key [key ...]
 
 // Watch set watching keys
 func Watch(db *DB, conn redis.Connection, args [][]byte) redis.Reply {
@@ -48,23 +51,30 @@ func StartMulti(conn redis.Connection) redis.Reply {
 
 // EnqueueCmd puts command line into `multi` pending queue
 func EnqueueCmd(conn redis.Connection, cmdLine [][]byte) redis.Reply {
+
+	// 获取命令的关键词
 	cmdName := strings.ToLower(string(cmdLine[0]))
+
+	// 命令对象的处理函数
 	cmd, ok := cmdTable[cmdName]
 	if !ok {
 		err := protocol.MakeErrReply("ERR unknown command '" + cmdName + "'")
 		conn.AddTxError(err)
 		return err
 	}
+	// 该命令需要有prepare函数
 	if cmd.prepare == nil {
 		err := protocol.MakeErrReply("ERR command '" + cmdName + "' cannot be used in MULTI")
 		conn.AddTxError(err)
 		return err
 	}
+
 	if !validateArity(cmd.arity, cmdLine) {
 		err := protocol.MakeArgNumErrReply(cmdName)
 		conn.AddTxError(err)
 		return err
 	}
+	// 入队完整的命令
 	conn.EnqueueCmd(cmdLine)
 	return protocol.MakeQueuedReply()
 }
@@ -86,20 +96,27 @@ func (db *DB) ExecMulti(conn redis.Connection, watching map[string]uint32, cmdLi
 	// prepare
 	writeKeys := make([]string, 0) // may contains duplicate
 	readKeys := make([]string, 0)
+	/// 遍历所有暂存的命令
 	for _, cmdLine := range cmdLines {
+		// 命令的关键词
 		cmdName := strings.ToLower(string(cmdLine[0]))
+		// 命令的执行函数
 		cmd := cmdTable[cmdName]
+		// 提取该命令的 读/写key
 		prepare := cmd.prepare
 		write, read := prepare(cmdLine[1:])
+		// 保存所有命令涉及的读/写key
 		writeKeys = append(writeKeys, write...)
 		readKeys = append(readKeys, read...)
 	}
-	// set watch
+	// set watch ，将key保存到切片中
 	watchingKeys := make([]string, 0, len(watching))
 	for key := range watching {
 		watchingKeys = append(watchingKeys, key)
 	}
 	readKeys = append(readKeys, watchingKeys...)
+
+	// 锁定所有的key(这里就是原子性实现的秘密)
 	db.RWLocks(writeKeys, readKeys)
 	defer db.RWUnLocks(writeKeys, readKeys)
 
@@ -111,7 +128,9 @@ func (db *DB) ExecMulti(conn redis.Connection, watching map[string]uint32, cmdLi
 	aborted := false
 	undoCmdLines := make([][]CmdLine, 0, len(cmdLines))
 	for _, cmdLine := range cmdLines {
+
 		undoCmdLines = append(undoCmdLines, db.GetUndoLogs(cmdLine))
+
 		result := db.execWithLock(cmdLine)
 		if protocol.IsErrorReply(result) {
 			aborted = true
@@ -126,7 +145,9 @@ func (db *DB) ExecMulti(conn redis.Connection, watching map[string]uint32, cmdLi
 		return protocol.MakeMultiRawReply(results)
 	}
 	// undo if aborted
-	size := len(undoCmdLines)
+	size := len(undoCmdLines) // 这里是回滚的命令
+
+	// 倒序执行回滚指令（完成回滚）
 	for i := size - 1; i >= 0; i-- {
 		curCmdLines := undoCmdLines[i]
 		if len(curCmdLines) == 0 {
@@ -152,6 +173,8 @@ func DiscardMulti(conn redis.Connection) redis.Reply {
 // GetUndoLogs return rollback commands
 func (db *DB) GetUndoLogs(cmdLine [][]byte) []CmdLine {
 	cmdName := strings.ToLower(string(cmdLine[0]))
+
+	//通过 命令关键词 cmdName 找到 回滚函数
 	cmd, ok := cmdTable[cmdName]
 	if !ok {
 		return nil
@@ -160,6 +183,7 @@ func (db *DB) GetUndoLogs(cmdLine [][]byte) []CmdLine {
 	if undo == nil {
 		return nil
 	}
+	// 执行回滚函数生成回滚命令行
 	return undo(db, cmdLine[1:])
 }
 

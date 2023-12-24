@@ -123,6 +123,10 @@ func (pool *Pool) Close() {
 	}
 	pool.closed = true
 	close(pool.idles)
+
+	for _, req := range pool.waitingReqs {
+		close(req)
+	}
 	pool.mu.Unlock()
 
 	for x := range pool.idles {
