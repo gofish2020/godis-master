@@ -1,9 +1,11 @@
 package database
 
 import (
-	"github.com/hdt3213/godis/interface/redis"
-	"github.com/hdt3213/godis/redis/protocol"
 	"strings"
+
+	"github.com/hdt3213/godis/interface/redis"
+	"github.com/hdt3213/godis/lib/logger"
+	"github.com/hdt3213/godis/redis/protocol"
 )
 
 const (
@@ -27,7 +29,9 @@ func execCommand(args [][]byte) redis.Reply {
 	if len(args) == 0 {
 		return getAllGodisCommandReply()
 	}
+
 	subCommand := strings.ToLower(string(args[0]))
+	logger.Infof("%q", subCommand)
 	if subCommand == "info" {
 		return getCommands(args[1:])
 	} else if subCommand == "count" {

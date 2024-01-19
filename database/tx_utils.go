@@ -1,9 +1,10 @@
 package database
 
 import (
+	"strconv"
+
 	"github.com/hdt3213/godis/aof"
 	"github.com/hdt3213/godis/lib/utils"
-	"strconv"
 )
 
 func readFirstKey(args [][]byte) ([]string, []string) {
@@ -45,6 +46,8 @@ func rollbackFirstKey(db *DB, args [][]byte) []CmdLine {
 func rollbackGivenKeys(db *DB, keys ...string) []CmdLine {
 	var undoCmdLines [][][]byte
 	for _, key := range keys {
+
+		// 基于当前内存数据状态，生成回滚
 		entity, ok := db.GetEntity(key)
 		if !ok {
 			undoCmdLines = append(undoCmdLines,

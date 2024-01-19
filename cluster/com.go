@@ -8,6 +8,8 @@ import (
 )
 
 // relay function relays command to peer or calls cluster.Exec
+
+// 将命令传递给其他主机节点执行
 func (cluster *Cluster) relay(peerId string, c redis.Connection, cmdLine [][]byte) redis.Reply {
 	// use a variable to allow injecting stub for testing, see defaultRelayImpl
 	if peerId == cluster.self {
@@ -15,13 +17,14 @@ func (cluster *Cluster) relay(peerId string, c redis.Connection, cmdLine [][]byt
 		return cluster.Exec(c, cmdLine)
 	}
 	// peerId is peer.Addr
-	cli, err := cluster.clientFactory.GetPeerClient(peerId)
+	cli, err := cluster.clientFactory.GetPeerClient(peerId) // 获取主机的连接
 	if err != nil {
 		return protocol.MakeErrReply(err.Error())
 	}
 	defer func() {
 		_ = cluster.clientFactory.ReturnPeerClient(peerId, cli)
 	}()
+	// 通过网络，将命令发送
 	return cli.Send(cmdLine)
 }
 

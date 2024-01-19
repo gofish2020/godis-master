@@ -2,9 +2,10 @@ package connection
 
 import (
 	"fmt"
-	"github.com/hdt3213/godis/lib/logger"
 	"io"
 	"sync"
+
+	"github.com/hdt3213/godis/lib/logger"
 )
 
 // FakeConn implements redis.Connection for test
@@ -68,6 +69,7 @@ func (c *FakeConn) Read(p []byte) (int, error) {
 	c.offset += n
 	offset := c.offset
 	c.mu.Unlock()
+	// 说明没有读取到数据
 	if n == 0 {
 		if c.closed {
 			return n, io.EOF

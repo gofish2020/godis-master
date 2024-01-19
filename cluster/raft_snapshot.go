@@ -3,10 +3,11 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/hdt3213/godis/redis/protocol"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/hdt3213/godis/redis/protocol"
 )
 
 // marshalSlotIds serializes slot ids
@@ -28,7 +29,7 @@ func marshalSlotIds(slots []*Slot) []string {
 			} else { // discrete number
 				scopes = append(scopes, []uint32{slot.ID})
 			}
-		} else {                                                 // within a scope
+		} else { // within a scope
 			if i == len(slots)-1 || slots[i+1].ID != slot.ID+1 { // reach end or not continuous, stop current scope
 				scope[1] = slot.ID
 				scopes = append(scopes, []uint32{scope[0], scope[1]})
@@ -85,7 +86,7 @@ func unmarshalSlotIds(args []string) ([]uint32, error) {
 type nodePayload struct {
 	ID       string   `json:"id"`
 	Addr     string   `json:"addr"`
-	SlotDesc []string `json:"slotDesc"`
+	SlotDesc []string `json:"slotDesc"` // []string{"0-30","40","45-100"}
 	Flags    uint32   `json:"flags"`
 }
 
@@ -107,6 +108,8 @@ func marshalNodes(nodes map[string]*Node) [][]byte {
 
 func unmarshalNodes(args [][]byte) (map[string]*Node, error) {
 	nodeMap := make(map[string]*Node)
+
+	// 每次的循环都是一个节点
 	for i, bin := range args {
 		payload := &nodePayload{}
 		err := json.Unmarshal(bin, payload)
@@ -123,6 +126,8 @@ func unmarshalNodes(args [][]byte) (map[string]*Node, error) {
 			Flags: payload.Flags,
 		}
 		for _, slotId := range slotIds {
+
+			// 节点下的槽信息
 			node.Slots = append(node.Slots, &Slot{
 				ID:     slotId,
 				NodeID: node.ID,
@@ -159,6 +164,8 @@ func (raft *Raft) makeSnapshotForFollower(followerId string) [][]byte {
 }
 
 // invoker provide with lock
+
+// nodeid state leaderid term commitIdx  jsonstring [jsonstring...]
 func (raft *Raft) loadSnapshot(snapshot [][]byte) protocol.ErrorReply {
 	// make sure raft.slots and node.Slots is the same object
 	selfNodeId := string(snapshot[0])
@@ -183,6 +190,10 @@ func (raft *Raft) loadSnapshot(snapshot [][]byte) protocol.ErrorReply {
 	if err != nil {
 		return protocol.MakeErrReply(err.Error())
 	}
+
+	/*
+
+	 */
 	raft.selfNodeID = selfNodeId
 	raft.state = state
 	raft.leaderId = leaderId

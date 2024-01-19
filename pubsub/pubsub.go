@@ -98,6 +98,7 @@ func Subscribe(hub *Hub, c redis.Connection, args [][]byte) redis.Reply {
 	defer hub.subsLocker.UnLocks(channels...)
 
 	for _, channel := range channels {
+		
 		if subscribe0(hub, channel, c) {
 			_, _ = c.Write(makeMsg(_subscribe, channel, int64(c.SubsCount())))
 		}

@@ -20,8 +20,8 @@ type Config struct {
 // Pool stores object for reusing, such as redis connection
 type Pool struct {
 	Config
-	factory     func() (interface{}, error)
-	finalizer   func(x interface{})
+	factory     func() (interface{}, error) // 对象生成器
+	finalizer   func(x interface{})         // 对象释放器
 	idles       chan interface{}
 	waitingReqs []request
 	activeCount uint // increases during creating connection, decrease during destroying connection
@@ -42,6 +42,8 @@ func New(factory func() (interface{}, error), finalizer func(x interface{}), cfg
 // getOnNoIdle try to create a new connection or waiting for connection being returned
 // invoker should have pool.mu
 func (pool *Pool) getOnNoIdle() (interface{}, error) {
+
+	// 如果生成的太多了，就不能生成新的，就要一直阻塞等待
 	if pool.activeCount >= pool.MaxActive {
 		// waiting for connection being returned
 		req := make(chan interface{}, 1)
@@ -54,6 +56,7 @@ func (pool *Pool) getOnNoIdle() (interface{}, error) {
 		return x, nil
 	}
 
+	// 否则就可以直接生成一个新对象
 	// create a new connection
 	pool.activeCount++ // hold a place for new connection
 	pool.mu.Unlock()
@@ -76,12 +79,14 @@ func (pool *Pool) Get() (interface{}, error) {
 	}
 
 	select {
+
+	// 从空闲获取一个对象
 	case item := <-pool.idles:
 		pool.mu.Unlock()
 		return item, nil
 	default:
 		// no pooled item, create one
-		return pool.getOnNoIdle()
+		return pool.getOnNoIdle() // 如果没有空闲，主动生成一个新的
 	}
 }
 
@@ -94,6 +99,7 @@ func (pool *Pool) Put(x interface{}) {
 		return
 	}
 
+	// 有等待的协程
 	if len(pool.waitingReqs) > 0 {
 		req := pool.waitingReqs[0]
 		copy(pool.waitingReqs, pool.waitingReqs[1:])

@@ -49,7 +49,7 @@ func execZAdd(db *DB, args [][]byte) redis.Reply {
 		return protocol.MakeSyntaxErrReply()
 	}
 	key := string(args[0])
-	size := (len(args) - 1) / 2 // 这个1表示 key这个参数
+	size := (len(args) - 1) / 2 // 这个1表示 key这个参数,size 表示  score member 有多少对
 
 	// 表示 score/member的对数（有多少对）
 	elements := make([]*SortedSet.Element, size)

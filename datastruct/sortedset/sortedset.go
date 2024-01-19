@@ -102,18 +102,20 @@ func (sortedSet *SortedSet) ForEachByRank(start int64, stop int64, desc bool, co
 
 	// find start node
 	var node *node
-	if desc {
-		node = sortedSet.skiplist.tail
-		if start > 0 {
-			node = sortedSet.skiplist.getByRank(int64(size - start))
+	if desc { // desc 表示链表是倒序的，[start,stop)是对倒序链表边界的查询
+		node = sortedSet.skiplist.tail // 倒序的第一个节点
+		if start > 0 {                 // 倒序链表的 start索引节点，就是正序的第 size-start节点
+			node = sortedSet.skiplist.getByRank(int64(size - start)) //  5 4 3 2 1
 		}
 	} else {
-		node = sortedSet.skiplist.header.level[0].forward
+
+		node = sortedSet.skiplist.header.level[0].forward // 正序的第一个节点
 		if start > 0 {
 			node = sortedSet.skiplist.getByRank(int64(start + 1))
 		}
 	}
 
+	// 需要查询的节点个数
 	sliceSize := int(stop - start)
 	for i := 0; i < sliceSize; i++ {
 		if !consumer(&node.Element) {
@@ -172,6 +174,7 @@ func (sortedSet *SortedSet) ForEach(min Border, max Border, offset int64, limit 
 		node = sortedSet.skiplist.getFirstInRange(min, max)
 	}
 
+	// 找到偏移的节点
 	for node != nil && offset > 0 {
 		if desc {
 			node = node.backward
@@ -181,6 +184,7 @@ func (sortedSet *SortedSet) ForEach(min Border, max Border, offset int64, limit 
 		offset--
 	}
 
+	// 从偏移节点开始，查找limit个节点
 	// A negative limit returns all elements from the offset
 	for i := 0; (i < int(limit) || limit < 0) && node != nil; i++ {
 		if !consumer(&node.Element) {

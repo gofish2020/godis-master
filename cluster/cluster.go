@@ -8,6 +8,10 @@ import (
 
 	"github.com/hdt3213/rdb/core"
 
+	"os"
+	"path"
+	"sync"
+
 	"github.com/hdt3213/godis/config"
 	database2 "github.com/hdt3213/godis/database"
 	"github.com/hdt3213/godis/datastruct/dict"
@@ -18,19 +22,16 @@ import (
 	"github.com/hdt3213/godis/lib/logger"
 	"github.com/hdt3213/godis/redis/parser"
 	"github.com/hdt3213/godis/redis/protocol"
-	"os"
-	"path"
-	"sync"
 )
 
 // Cluster represents a node of godis cluster
 // it holds part of data and coordinates other nodes to finish transactions
 type Cluster struct {
-	self          string
+	self          string // 节点id（这里其实就是ip+port）
 	addr          string
 	db            database.DBEngine
 	transactions  *dict.SimpleDict // id -> Transaction
-	transactionMu sync.RWMutex
+	transactionMu sync.RWMutex     //锁定 transactions对象
 	topology      topology
 	slotMu        sync.RWMutex
 	slots         map[uint32]*hostSlot
@@ -135,6 +136,8 @@ func isAuthenticated(c redis.Connection) bool {
 }
 
 // Exec executes command on cluster
+
+// 集群处理命令入口函数
 func (cluster *Cluster) Exec(c redis.Connection, cmdLine [][]byte) (result redis.Reply) {
 	defer func() {
 		if err := recover(); err != nil {
@@ -170,7 +173,7 @@ func (cluster *Cluster) Exec(c redis.Connection, cmdLine [][]byte) (result redis
 			return protocol.MakeArgNumErrReply(cmdName)
 		}
 		return execMulti(cluster, c, nil)
-	} else if cmdName == "select" {
+	} else if cmdName == "select" { // 不支持
 		return protocol.MakeErrReply("select not supported in cluster")
 	}
 	if c != nil && c.InMultiState() {
@@ -180,6 +183,8 @@ func (cluster *Cluster) Exec(c redis.Connection, cmdLine [][]byte) (result redis
 	if !ok {
 		return protocol.MakeErrReply("ERR unknown command '" + cmdName + "', or not supported in cluster mode")
 	}
+
+	// 命令执行 : example  set key value
 	result = cmdFunc(cluster, c, cmdLine)
 	return
 }

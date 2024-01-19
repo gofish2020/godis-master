@@ -2,10 +2,11 @@ package cluster
 
 import (
 	"fmt"
+	"strconv"
+
 	"github.com/hdt3213/godis/interface/redis"
 	"github.com/hdt3213/godis/lib/utils"
 	"github.com/hdt3213/godis/redis/protocol"
-	"strconv"
 )
 
 const keyExistsErr = "key exists"
@@ -41,6 +42,7 @@ func MGet(cluster *Cluster, c redis.Connection, cmdLine CmdLine) redis.Reply {
 	return protocol.MakeMultiBulkReply(result)
 }
 
+// MSET key value [key value ...]
 // MSet atomically sets multi key-value in cluster, writeKeys can be distributed on any node
 func MSet(cluster *Cluster, c redis.Connection, cmdLine CmdLine) redis.Reply {
 	argCount := len(cmdLine) - 1
@@ -51,28 +53,43 @@ func MSet(cluster *Cluster, c redis.Connection, cmdLine CmdLine) redis.Reply {
 	size := argCount / 2
 	keys := make([]string, size)
 	valueMap := make(map[string]string)
+
+	// 提取出 key/value 对
 	for i := 0; i < size; i++ {
 		keys[i] = string(cmdLine[2*i+1])
 		valueMap[keys[i]] = string(cmdLine[2*i+2])
 	}
 
+	// groupMap -> 【key：节点 value:关键词列表】
 	groupMap := cluster.groupBy(keys)
-	if len(groupMap) == 1 && allowFastTransaction { // do fast
+	if len(groupMap) == 1 && allowFastTransaction {
+
+		// 表示只有一个节点，（所有的keys都属于同一个节点）
 		for peer := range groupMap {
-			return cluster.relay(peer, c, modifyCmd(cmdLine, "MSet_"))
+
+			return cluster.relay(peer, c, modifyCmd(cmdLine, "MSet_")) // MSet_ key value [key value...]
 		}
 	}
 
 	//prepare
 	var errReply redis.Reply
+	// 事务id
 	txID := cluster.idGenerator.NextID()
 	txIDStr := strconv.FormatInt(txID, 10)
 	rollback := false
 	for peer, group := range groupMap {
+
 		peerArgs := []string{txIDStr, "MSET"}
+
+		// group 表示多个key
 		for _, k := range group {
+			// 在同一个节点下的，key/value对
 			peerArgs = append(peerArgs, k, valueMap[k])
 		}
+
+		//peer 表示网络地址
+
+		// 构造出 prepare trxid mset key value[key value...]
 		resp := cluster.relay(peer, c, makeArgs("Prepare", peerArgs...))
 		if protocol.IsErrorReply(resp) {
 			errReply = resp
@@ -84,6 +101,8 @@ func MSet(cluster *Cluster, c redis.Connection, cmdLine CmdLine) redis.Reply {
 		// rollback
 		requestRollback(cluster, c, txID, groupMap)
 	} else {
+
+		// commit
 		_, errReply = requestCommit(cluster, c, txID, groupMap)
 		rollback = errReply != nil
 	}
@@ -91,7 +110,6 @@ func MSet(cluster *Cluster, c redis.Connection, cmdLine CmdLine) redis.Reply {
 		return &protocol.OkReply{}
 	}
 	return errReply
-
 }
 
 // MSetNX sets multi key-value in database, only if none of the given writeKeys exist and all given writeKeys are on the same node

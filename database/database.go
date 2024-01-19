@@ -229,7 +229,7 @@ func (db *DB) Remove(key string) {
 }
 
 // Removes the given keys from db
-func (db *DB) Removes(keys ...string) (deleted int) {
+func (db *DB) 	Removes(keys ...string) (deleted int) {
 	deleted = 0
 	for _, key := range keys {
 		_, exists := db.data.GetWithLock(key)

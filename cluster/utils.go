@@ -28,6 +28,8 @@ func makeArgs(cmd string, args ...string) [][]byte {
 }
 
 // return node -> writeKeys
+
+// 将peer和keys进行映射，知道key所属的节点
 func (cluster *Cluster) groupBy(keys []string) map[string][]string {
 	result := make(map[string][]string)
 	for _, key := range keys {
@@ -50,15 +52,15 @@ func (cluster *Cluster) pickNode(slotID uint32) *Node {
 	hSlot := cluster.getHostSlot(slotID)
 	if hSlot != nil {
 		switch hSlot.state {
-		case slotStateMovingOut:
+		case slotStateMovingOut: // 槽节点状态：移出
 			return cluster.topology.GetNode(hSlot.newNodeID)
 		case slotStateImporting, slotStateHost:
 			return cluster.topology.GetNode(cluster.self)
 		}
 	}
 
-	slot := cluster.topology.GetSlots()[int(slotID)]
-	node := cluster.topology.GetNode(slot.NodeID)
+	slot := cluster.topology.GetSlots()[int(slotID)] // 槽id -> 槽对象
+	node := cluster.topology.GetNode(slot.NodeID)    // 槽对象中有主机节点id -> 主机节点*Node
 	return node
 }
 

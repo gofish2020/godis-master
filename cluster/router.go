@@ -22,19 +22,20 @@ func registerDefaultCmd(name string) {
 
 // relay command to responsible peer, and return its protocol to client
 func defaultFunc(cluster *Cluster, c redis.Connection, args [][]byte) redis.Reply {
+
+	// 例如：set key value
 	key := string(args[1])
-	slotId := getSlot(key) // 计算key所属的hash slot
-	peer := cluster.pickNode(slotId)
-	if peer.ID == cluster.self {
+	slotId := getSlot(key)           // 同key -> 获取槽ID
+	peer := cluster.pickNode(slotId) // 通过槽ID -> 获取该槽所属的节点
+	if peer.ID == cluster.self {     // 表示key就是属于当前节点
 		err := cluster.ensureKeyWithoutLock(key)
 		if err != nil {
 			return err
 		}
 		// to self db
-		//return cluster.db.Exec(c, cmdLine)
-		return cluster.db.Exec(c, args)
+		return cluster.db.Exec(c, args) //本地执行
 	}
-	return cluster.relay(peer.ID, c, args)
+	return cluster.relay(peer.ID, c, args) // 远端执行
 }
 
 func init() {

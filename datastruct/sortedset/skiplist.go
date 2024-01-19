@@ -100,16 +100,18 @@ func (skiplist *skiplist) insert(member string, score float64) *node {
 
 		/*
 			i 表示层高
-			rank表示i层横向的距离
-			update 表示i层最右边的节点
+			rank：表示node节点，在i层的总跨度（即：node距离header的距离）
+			update：表示node节点
 		*/
 
 		// rank的含义表示从最左边的边界header边界，到当前node的，在i层级上的跨度（这个跨度是从header到node的跨度，总跨度）
 		if i == skiplist.level-1 {
 			rank[i] = 0
-		} else {
+		} else { // for循环再次进入，表示进入到下一层，当前的节点node暂时还是上一层计算的node，所以距离边界header的距离，在当前i层，继承了i+1层
 			rank[i] = rank[i+1] // store rank that is crossed to reach the insert position
 		}
+
+		// 本质就是查找 member和score应该存放的位置的【前驱节点】（在当前i层）
 		if node.level[i] != nil {
 			// traverse the skip list
 
@@ -117,6 +119,9 @@ func (skiplist *skiplist) insert(member string, score float64) *node {
 				继续（当前节点的）下一层的条件为：
 				1.当前节点【没有】后缀节点；
 				2.当前节点【有】  后缀节点； 分值很大 or 分值相同，但是member比较大
+
+
+				计算的目的：在于找到前驱节点 node
 			*/
 			// for循环的目的：在于不断的【向右移动】
 			for node.level[i].forward != nil &&
@@ -125,17 +130,14 @@ func (skiplist *skiplist) insert(member string, score float64) *node {
 					// 后缀节点分值一样，但是 member 偏小
 					(node.level[i].forward.Score == score && node.level[i].forward.Member < member)) { // same score, different key
 				rank[i] += node.level[i].span
-				// 当前节点，（设定为：同一层的后缀节点）
+				// 当前节点，重新设定为此层i的后面的节点
 				node = node.level[i].forward
 			}
 		}
-		// rank[i] 层i的最右边节点的跨度
-		// 层i的最右边的节点
+		// 保存在当前层i的前驱节点
 		update[i] = node
 	}
-	// 都表示某一层的最右边的一个节点
-	// rank，从header到当前节点update的距离
-	// update
+	//通过上面的计算，update就是各个层的前驱节点，rank就是各个层的前驱节点的编号
 
 	level := randomLevel() // 随机层高
 	// extend skiplist level
@@ -153,14 +155,16 @@ func (skiplist *skiplist) insert(member string, score float64) *node {
 
 	// 这里的node节点就是即将插入的新节点
 	node = makeNode(level, score, member)
+
+	// 将新建的节点，插入到链表中
 	for i := int16(0); i < level; i++ {
 
-		// 这里用链表的思路理解
+		// 这里用链表的思路理解，每一层进行的节点的插入
 		node.level[i].forward = update[i].level[i].forward
 		update[i].level[i].forward = node
 
-		// rank[0] - rank[i] 表示 update[0]和update[1]两个节点之间的距离
-		// update[i].level[i].span  表示 update[1]节点到后驱节点到距离
+		// rank[0] - rank[i] 表示 update[0]和update[i]两个节点之间的距离
+		// update[i].level[i].span  表示 update[i]节点到后驱节点到距离
 		// 相减的结果，表示 update[0]节点到后序节点到距离，而插入到node位置恰好就是 update[0]的位置
 		node.level[i].span = update[i].level[i].span - (rank[0] - rank[i])
 
@@ -202,22 +206,28 @@ func (skiplist *skiplist) insert(member string, score float64) *node {
 
 func (skiplist *skiplist) removeNode(node *node, update []*node) {
 
+	// 每一层都剔除node节点
 	for i := int16(0); i < skiplist.level; i++ {
-		if update[i].level[i].forward == node {
+		if update[i].level[i].forward == node { // 本层有指向关系
 			update[i].level[i].span += node.level[i].span - 1
 			update[i].level[i].forward = node.level[i].forward
 		} else {
 			update[i].level[i].span--
 		}
 	}
+
+	// node是被删除的节点，将后驱指针调整下
 	if node.level[0].forward != nil {
 		node.level[0].forward.backward = node.backward
 	} else {
-		skiplist.tail = node.backward
+		skiplist.tail = node.backward // 说明当前node是最后一个节点，修改下tail
 	}
+
+	// 重新找到层高（最高）
 	for skiplist.level > 1 && skiplist.header.level[skiplist.level-1].forward == nil {
 		skiplist.level--
 	}
+	// 删掉节点，数量-1
 	skiplist.length--
 }
 

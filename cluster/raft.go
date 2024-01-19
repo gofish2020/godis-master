@@ -105,9 +105,9 @@ func (e *logEntry) unmarshal(bin []byte) error {
 type Raft struct {
 	cluster        *Cluster
 	mu             sync.RWMutex
-	selfNodeID     string
+	selfNodeID     string // ip+port
 	slots          []*Slot
-	leaderId       string
+	leaderId       string // leader的 ip+port
 	nodes          map[string]*Node
 	log            []*logEntry // log index begin from 0
 	baseIndex      int         // baseIndex + 1 == log[0].Index, it can be considered as the previous log index
@@ -224,6 +224,8 @@ func (raft *Raft) StartAsSeed(listenAddr string) protocol.ErrorReply {
 	selfNodeID := listenAddr
 	raft.mu.Lock()
 	defer raft.mu.Unlock()
+
+	// 总共16384个槽
 	raft.slots = make([]*Slot, slotCount)
 	// claim all slots
 	for i := range raft.slots {
@@ -275,8 +277,27 @@ func (raft *Raft) start(state raftState) {
 			}
 			switch raft.state {
 			case follower:
+
+				/*
+					作为follower：
+
+					1.如果有心跳过来，重置选举时间；
+					2.如果没有心跳过来，进入选举状态
+
+
+					follower -> follower or candidate
+				*/
 				raft.followerJob()
 			case candidate:
+
+				/*
+					1.当前是 term+1,同时向所有的节点发送投票请求
+					2.如果投票结果term > 自己当前的term，自己就变成 follower
+					3.如果投票结果大于一半以上，自己就是leader
+					4.如果投票结果没有达到预期，自己就是follower
+
+					也就是 候选人candidate -> leader or follower状态
+				*/
 				raft.candidateJob()
 			case leader:
 				raft.leaderJob()
@@ -294,7 +315,7 @@ func (raft *Raft) Close() error {
 func (raft *Raft) followerJob() {
 	electionTimeout := time.Until(raft.electionAlarm)
 	select {
-	case hb := <-raft.heartbeatChan:
+	case hb := <-raft.heartbeatChan: // 心跳：就是leader会在一定时间发送心跳
 		raft.mu.Lock()
 		nodeId := hb.sender
 		raft.nodes[nodeId].lastHeard = time.Now()
@@ -303,21 +324,21 @@ func (raft *Raft) followerJob() {
 		raft.proposedIndex += len(hb.entries)
 		raft.applyLogEntries(raft.getLogEntries(raft.committedIndex+1, hb.commitTo+1))
 		raft.committedIndex = hb.commitTo
-		raft.electionAlarm = nextElectionAlarm()
+		raft.electionAlarm = nextElectionAlarm() // 说明收到心跳，重置进入选举的超时时间
 		raft.mu.Unlock()
-	case <-time.After(electionTimeout):
+	case <-time.After(electionTimeout): // 如果没有接收到心跳（心跳超时），会自动进入选举
 		// change to candidate
 		logger.Info("raft leader timeout")
 		raft.mu.Lock()
-		raft.electionAlarm = nextElectionAlarm()
-		if raft.votedFor != "" {
+		raft.electionAlarm = nextElectionAlarm() // 下一次的进入选举的超时时间
+		if raft.votedFor != "" {                 // 如果已经投过票，说明已经有人进入选举，当前就不进入了
 			// received request-vote and has voted during waiting timeout
 			raft.mu.Unlock()
 			logger.Infof("%s has voted for %s, give up being a candidate", raft.selfNodeID, raft.votedFor)
 			return
 		}
 		logger.Info("change to candidate")
-		raft.state = candidate
+		raft.state = candidate // 进入选举
 		raft.mu.Unlock()
 	case <-raft.closeChan:
 		return
@@ -346,7 +367,7 @@ func (raft *Raft) candidateJob() {
 	currentTerm := raft.term
 	lastLogTerm, lastLogIndex := raft.getLogProgressWithinLock()
 	req := &voteReq{
-		nodeID:       raft.selfNodeID,
+		nodeID:       raft.selfNodeID, // 请求节点
 		lastLogTerm:  lastLogTerm,
 		lastLogIndex: lastLogIndex,
 		term:         raft.term,
@@ -360,15 +381,17 @@ func (raft *Raft) candidateJob() {
 	wg := sync.WaitGroup{}
 	elected := make(chan struct{}, len(raft.nodes)) // may receive many elected message during an election, only handle the first one
 	voteFinished := make(chan struct{})
+
+	// 集群中的所有节点
 	for nodeID := range raft.nodes {
-		if nodeID == raft.selfNodeID {
+		if nodeID == raft.selfNodeID { // 除了当前节点
 			continue
 		}
 		nodeID := nodeID
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			rawResp := raft.cluster.relay(nodeID, conn, args)
+			rawResp := raft.cluster.relay(nodeID, conn, args) // 给所有的其他节点，发送【投票消息】
 			if err, ok := rawResp.(protocol.ErrorReply); ok {
 				logger.Info(fmt.Sprintf("cannot get vote response from %s, %v", nodeID, err))
 				return
@@ -379,7 +402,7 @@ func (raft *Raft) candidateJob() {
 				return
 			}
 			resp := &voteResp{}
-			err := resp.unmarshal(respBody.Args)
+			err := resp.unmarshal(respBody.Args) // 返回【投票结果】
 			if err != nil {
 				logger.Info(fmt.Sprintf("cannot get vote response from %s, %v", nodeID, err))
 				return
@@ -389,11 +412,13 @@ func (raft *Raft) candidateJob() {
 			defer raft.mu.Unlock()
 			logger.Info("received vote response from " + nodeID)
 			// check-lock-check
-			if currentTerm != raft.term || raft.state != candidate {
+			if currentTerm != raft.term || raft.state != candidate { // 如果当前节点的状态，已经不是我发送【投票】时候的状态，直接忽略【投票结果】
 				// vote has finished during waiting lock
 				logger.Info("vote has finished during waiting lock, current term " + strconv.Itoa(raft.term) + " state " + strconv.Itoa(int(raft.state)))
 				return
 			}
+
+			// 有更高任期的节点，自己默认编程follower
 			if resp.term > raft.term {
 				logger.Infof(fmt.Sprintf("vote response from %s has newer term %d", nodeID, resp.term))
 				raft.term = resp.term
@@ -403,9 +428,12 @@ func (raft *Raft) candidateJob() {
 				return
 			}
 
+			// 说明有人投票给自己
 			if resp.voteFor == raft.selfNodeID {
 				logger.Infof(fmt.Sprintf("get vote from %s", nodeID))
 				raft.voteCount++
+
+				// 票数达到 一半以上，自己就是 leader
 				if raft.voteCount >= len(raft.nodes)/2+1 {
 					logger.Info("elected to be the leader")
 					raft.state = leader
@@ -415,15 +443,17 @@ func (raft *Raft) candidateJob() {
 			}
 		}()
 	}
+
 	go func() {
 		wg.Wait()
-		voteFinished <- struct{}{}
+		voteFinished <- struct{}{} // 说明选举任务全部都执行结束
 	}()
 
 	// wait vote finished or elected
 	select {
 	case <-voteFinished:
 		raft.mu.Lock()
+		// 选举结束，如果当前的状态没有发生改变；【说明投票结果不理想】，重置回follower状态
 		if raft.term == currentTerm && raft.state == candidate {
 			logger.Infof("%s failed to be elected, back to follower", raft.selfNodeID)
 			raft.state = follower
@@ -431,7 +461,7 @@ func (raft *Raft) candidateJob() {
 			raft.voteCount = 0
 		}
 		raft.mu.Unlock()
-	case <-elected:
+	case <-elected: // 赢得选举
 		raft.votedFor = ""
 		raft.voteCount = 0
 		logger.Info("win election, take leader of  term " + strconv.Itoa(currentTerm))
@@ -488,7 +518,7 @@ func (raft *Raft) leaderJob() {
 	for _, status := range raft.nodeIndexMap {
 		recvedIndices = append(recvedIndices, status.receivedIndex)
 	}
-	sort.Slice(recvedIndices, func(i, j int) bool {
+	sort.Slice(recvedIndices, func(i, j int) bool { // 从大到小
 		return recvedIndices[i] > recvedIndices[j]
 	})
 	// more than half of the nodes received entries, can be committed
@@ -668,8 +698,9 @@ func (req *voteReq) marshal() [][]byte {
 	}
 }
 
+// node index term
 func (req *voteReq) unmarshal(bin [][]byte) error {
-	req.nodeID = string(bin[0])
+	req.nodeID = string(bin[0]) // node
 	term, err := strconv.Atoi(string(bin[1]))
 	if err != nil {
 		return fmt.Errorf("illegal term %s", string(bin[2]))
@@ -689,8 +720,8 @@ func (req *voteReq) unmarshal(bin [][]byte) error {
 }
 
 type voteResp struct {
-	voteFor string
-	term    int
+	voteFor string // 投票给了谁
+	term    int    // 这个表示，相应投票的节点，所处的term
 }
 
 func (resp *voteResp) unmarshal(bin [][]byte) error {
@@ -729,7 +760,7 @@ func execRaftRequestVote(cluster *Cluster, c redis.Connection, args [][]byte) re
 	defer raft.mu.Unlock()
 	logger.Info("recv request vote from " + req.nodeID + ", term: " + strconv.Itoa(req.term))
 	resp := &voteResp{}
-	if req.term < raft.term {
+	if req.term < raft.term { // 如果请求term太小了
 		resp.term = raft.term
 		resp.voteFor = raft.leaderId // tell candidate the new leader
 		logger.Info("deny request vote from " + req.nodeID + " for earlier term")
@@ -1010,7 +1041,7 @@ func (raft *Raft) Join(seed string) protocol.ErrorReply {
 	cluster := raft.cluster
 
 	/* STEP1: get leader from seed */
-	seedCli, err := cluster.clientFactory.GetPeerClient(seed)
+	seedCli, err := cluster.clientFactory.GetPeerClient(seed) // 随机从一个节点，获取 leader节点的地址
 	if err != nil {
 		return protocol.MakeErrReply("connect with seed failed: " + err.Error())
 	}
@@ -1023,7 +1054,7 @@ func (raft *Raft) Join(seed string) protocol.ErrorReply {
 	if !ok || len(leaderInfo.Args) != 2 {
 		return protocol.MakeErrReply("ERR get-leader returns wrong reply")
 	}
-	leaderAddr := string(leaderInfo.Args[1])
+	leaderAddr := string(leaderInfo.Args[1]) // leader节点地址
 
 	/* STEP2: join raft group */
 	leaderCli, err := cluster.clientFactory.GetPeerClient(leaderAddr)
@@ -1031,7 +1062,7 @@ func (raft *Raft) Join(seed string) protocol.ErrorReply {
 		return protocol.MakeErrReply("connect with seed failed: " + err.Error())
 	}
 	defer cluster.clientFactory.ReturnPeerClient(leaderAddr, leaderCli)
-	ret = leaderCli.Send(utils.ToCmdLine("raft", "join", cluster.addr))
+	ret = leaderCli.Send(utils.ToCmdLine("raft", "join", cluster.addr)) // 发送 raft join 命令，将当前节点申请加入 leader中
 	if protocol.IsErrorReply(ret) {
 		return ret.(protocol.ErrorReply)
 	}
@@ -1045,7 +1076,7 @@ func (raft *Raft) Join(seed string) protocol.ErrorReply {
 		return errReply
 	}
 	cluster.self = raft.selfNodeID
-	raft.start(follower)
+	raft.start(follower) // 作为follower启动
 	return nil
 }
 

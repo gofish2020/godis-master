@@ -2,13 +2,15 @@ package client
 
 import (
 	"bytes"
+	"reflect"
+	"strconv"
+	"testing"
+	"time"
+
 	"github.com/hdt3213/godis/lib/logger"
 	"github.com/hdt3213/godis/lib/utils"
 	"github.com/hdt3213/godis/redis/protocol"
 	"github.com/hdt3213/godis/redis/protocol/asserts"
-	"strconv"
-	"testing"
-	"time"
 )
 
 func TestClient(t *testing.T) {
@@ -131,6 +133,9 @@ func TestReconnect(t *testing.T) {
 		result := client.Send([][]byte{
 			[]byte("PING"),
 		})
+
+		t.Log(reflect.TypeOf(result))
+		t.Log(string(result.ToBytes()))
 		if bytes.Equal(result.ToBytes(), []byte("+PONG\r\n")) {
 			success = true
 			break

@@ -1,6 +1,9 @@
 package wildcard
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestWildCard(t *testing.T) {
 	p, err := CompilePattern("")
@@ -187,4 +190,13 @@ func TestWildCard(t *testing.T) {
 		t.Error(err)
 		return
 	}
+}
+
+func TestCompile(t *testing.T) {
+
+	// CompilePattern("h[^ab]llo")
+	// CompilePattern("a*")
+	CompilePattern(`\[^`)
+	time.Sleep(3 * time.Second)
+
 }

@@ -1,10 +1,11 @@
 package cluster
 
 import (
-	"github.com/hdt3213/godis/redis/protocol"
 	"hash/crc32"
 	"strings"
 	"time"
+
+	"github.com/hdt3213/godis/redis/protocol"
 )
 
 // Slot represents a hash slot,  used in cluster internal messages
@@ -31,6 +32,7 @@ func getPartitionKey(key string) string {
 	return key[beg+1 : end]
 }
 
+// 对 16384 求余
 func getSlot(key string) uint32 {
 	partitionKey := getPartitionKey(key)
 	return crc32.ChecksumIEEE([]byte(partitionKey)) % uint32(slotCount)
@@ -38,9 +40,9 @@ func getSlot(key string) uint32 {
 
 // Node represents a node and its slots, used in cluster internal messages
 type Node struct {
-	ID        string
+	ID        string // id和addr是同一个值
 	Addr      string
-	Slots     []*Slot // ascending order by slot id
+	Slots     []*Slot // ascending order by slot id【节点所需的所有槽（正序排列）】
 	Flags     uint32
 	lastHeard time.Time
 }

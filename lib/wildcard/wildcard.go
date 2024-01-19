@@ -4,6 +4,8 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+
+	"github.com/hdt3213/godis/lib/logger"
 )
 
 // Pattern represents a wildcard pattern
@@ -30,6 +32,7 @@ var errEndWithEscape = "end with escape \\"
 func CompilePattern(src string) (*Pattern, error) {
 	regexSrc := strings.Builder{}
 	regexSrc.WriteByte('^')
+
 	for i := 0; i < len(src); i++ {
 		ch := src[i]
 		if ch == '\\' {
@@ -62,6 +65,8 @@ func CompilePattern(src string) (*Pattern, error) {
 		}
 	}
 	regexSrc.WriteByte('$')
+
+	logger.Warn(regexSrc.String())
 	re, err := regexp.Compile(regexSrc.String())
 	if err != nil {
 		return nil, err

@@ -32,16 +32,17 @@ type Border interface {
 type ScoreBorder struct {
 	Inf     int8
 	Value   float64
-	Exclude bool
+	Exclude bool // 不包含（排除的意思）
 }
 
 // if max.greater(score) then the score is within the upper border
 // do not use min.greater()
 func (border *ScoreBorder) greater(element *Element) bool {
+
 	value := element.Score
-	if border.Inf == scoreNegativeInf {
+	if border.Inf == scoreNegativeInf { // -inf
 		return false
-	} else if border.Inf == scorePositiveInf {
+	} else if border.Inf == scorePositiveInf { // +inf
 		return true
 	}
 	if border.Exclude {
@@ -52,9 +53,9 @@ func (border *ScoreBorder) greater(element *Element) bool {
 
 func (border *ScoreBorder) less(element *Element) bool {
 	value := element.Score
-	if border.Inf == scoreNegativeInf {
+	if border.Inf == scoreNegativeInf { // -inf
 		return true
-	} else if border.Inf == scorePositiveInf {
+	} else if border.Inf == scorePositiveInf { // +inf
 		return false
 	}
 	if border.Exclude {
@@ -79,6 +80,7 @@ var scoreNegativeInfBorder = &ScoreBorder{
 	Inf: scoreNegativeInf,
 }
 
+// 模拟score的范围
 // ParseScoreBorder creates ScoreBorder from redis arguments
 func ParseScoreBorder(s string) (Border, error) {
 	if s == "inf" || s == "+inf" {
@@ -109,12 +111,14 @@ func ParseScoreBorder(s string) (Border, error) {
 	}, nil
 }
 
-func (border *ScoreBorder) isIntersected(max Border) bool {
+// 校验两个边界是否有重叠
+func (border *ScoreBorder) isIntersected(max Border) bool { //是否重叠，重叠无效
 	minValue := border.Value
 	maxValue := max.(*ScoreBorder).Value
-	return minValue > maxValue || (minValue == maxValue && (border.getExclude() || max.getExclude()))
+	return minValue > maxValue || (minValue == maxValue && (border.getExclude() || max.getExclude())) // [ min ,max )
 }
 
+// 模拟字符串的范围
 // LexBorder represents range of a string value, including: <, <=, >, >=, +, -
 type LexBorder struct {
 	Inf     int8
@@ -126,9 +130,9 @@ type LexBorder struct {
 // do not use min.greater()
 func (border *LexBorder) greater(element *Element) bool {
 	value := element.Member
-	if border.Inf == lexNegativeInf {
+	if border.Inf == lexNegativeInf { // -inf
 		return false
-	} else if border.Inf == lexPositiveInf {
+	} else if border.Inf == lexPositiveInf { // +inf
 		return true
 	}
 	if border.Exclude {
