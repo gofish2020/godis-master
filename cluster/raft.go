@@ -105,9 +105,9 @@ func (e *logEntry) unmarshal(bin []byte) error {
 type Raft struct {
 	cluster        *Cluster
 	mu             sync.RWMutex
-	selfNodeID     string // ip+port
-	slots          []*Slot
-	leaderId       string // leader的 ip+port
+	selfNodeID     string  // ip+port
+	slots          []*Slot // slot -> node
+	leaderId       string  // leader的 ip+port
 	nodes          map[string]*Node
 	log            []*logEntry // log index begin from 0
 	baseIndex      int         // baseIndex + 1 == log[0].Index, it can be considered as the previous log index
@@ -116,9 +116,9 @@ type Raft struct {
 	term           int
 	votedFor       string
 	voteCount      int
-	committedIndex int // index of the last committed logEntry
-	proposedIndex  int // index of the last proposed logEntry
-	heartbeatChan  chan *heartbeat
+	committedIndex int             //处理进度 index of the last committed logEntry
+	proposedIndex  int             //提交进度 index of the last proposed logEntry
+	heartbeatChan  chan *heartbeat // // 缓冲大小为1
 	persistFile    string
 	electionAlarm  time.Time
 	closeChan      chan struct{}
@@ -225,7 +225,7 @@ func (raft *Raft) StartAsSeed(listenAddr string) protocol.ErrorReply {
 	raft.mu.Lock()
 	defer raft.mu.Unlock()
 
-	// 总共16384个槽
+	// raft下的所有的槽
 	raft.slots = make([]*Slot, slotCount)
 	// claim all slots
 	for i := range raft.slots {
@@ -236,6 +236,8 @@ func (raft *Raft) StartAsSeed(listenAddr string) protocol.ErrorReply {
 	}
 	raft.selfNodeID = selfNodeID
 	raft.leaderId = selfNodeID
+
+	// raft下的所有节点
 	raft.nodes = make(map[string]*Node)
 	raft.nodes[selfNodeID] = &Node{
 		ID:    selfNodeID,
@@ -248,7 +250,7 @@ func (raft *Raft) StartAsSeed(listenAddr string) protocol.ErrorReply {
 			receivedIndex: raft.proposedIndex,
 		},
 	}
-	raft.start(leader)
+	raft.start(leader) // 作为leader启动
 	raft.cluster.self = selfNodeID
 	return nil
 }
@@ -266,6 +268,7 @@ const raftClosed = "ERR raft has closed"
 
 func (raft *Raft) start(state raftState) {
 	raft.state = state
+	// 缓冲大小为1
 	raft.heartbeatChan = make(chan *heartbeat, 1)
 	raft.electionAlarm = nextElectionAlarm()
 	//raft.nodeIndexMap = make(map[string]*nodeStatus)
@@ -475,8 +478,10 @@ func (raft *Raft) candidateJob() {
 func (raft *Raft) getNodeIndexMap() {
 	// ask node index
 	nodeIndexMap := make(map[string]*nodeStatus)
+
+	// 遍历所有的节点
 	for _, node := range raft.nodes {
-		status := raft.askNodeIndex(node)
+		status := raft.askNodeIndex(node) // 通过网络，获取节点的 proposedIndex
 		if status != nil {
 			nodeIndexMap[node.ID] = status
 		}
@@ -524,13 +529,17 @@ func (raft *Raft) leaderJob() {
 	// more than half of the nodes received entries, can be committed
 	commitTo := 0
 	if len(recvedIndices) > 0 {
-		commitTo = recvedIndices[len(recvedIndices)/2]
+		commitTo = recvedIndices[len(recvedIndices)/2] // 获取一个中间值（receivedIndex）
 	}
 	// new node (received index is 0) may cause commitTo less than raft.committedIndex
 	if commitTo > raft.committedIndex {
+		// 获取范围内的log切片()
 		toCommit := raft.getLogEntries(raft.committedIndex+1, commitTo+1) // left inclusive, right exclusive
+
+		// 这里是主节点，负责对logEntry进行处理
 		raft.applyLogEntries(toCommit)
 		raft.committedIndex = commitTo
+		// 处理完成以后，wg.Done
 		for _, entry := range toCommit {
 			if entry.wg != nil {
 				entry.wg.Done()
@@ -539,13 +548,13 @@ func (raft *Raft) leaderJob() {
 	}
 	// save receivedIndex in local variable in case changed by other goroutines
 	proposalIndex := raft.proposedIndex
-	snapshot := raft.makeSnapshot() // the snapshot is consistent with the committed log
-	for _, node := range raft.nodes {
-		if node.ID == raft.selfNodeID {
+	snapshot := raft.makeSnapshot()   // the snapshot is consistent with the committed log
+	for _, node := range raft.nodes { // 遍历节点，发送心跳
+		if node.ID == raft.selfNodeID { // 自己就不用给自己发送了
 			continue
 		}
 		node := node
-		status := raft.nodeIndexMap[node.ID]
+		status := raft.nodeIndexMap[node.ID] // 获取节点的proposedIndex
 		go func() {
 			raft.nodeLock.Lock(node.ID)
 			defer raft.nodeLock.UnLock(node.ID)
@@ -580,13 +589,15 @@ func (raft *Raft) leaderJob() {
 					term:     raft.term,
 					commitTo: commitTo,
 				}
-				// append new entries to heartbeat payload
+				// 主节点消息多，status节点消息少，说明：丢了一部分消息
 				if proposalIndex > status.receivedIndex {
+
+					// 这里类似于补差价（补充缺少的logEntry，通过心跳发送给follower）
 					req.prevLogTerm = raft.getLogEntry(status.receivedIndex).Term
 					req.prevLogIndex = status.receivedIndex
 					req.entries = raft.getLogEntriesFrom(status.receivedIndex + 1)
 				}
-				cmdLine = utils.ToCmdLine(
+				cmdLine = utils.ToCmdLine( // 发送心跳
 					"raft",
 					"heartbeat",
 				)
@@ -972,6 +983,8 @@ func (raft *Raft) persist() error {
 	if err != nil {
 		return err
 	}
+
+	// 集群配置快照
 	snapshot := raft.makeSnapshot()
 	buf := bytes.NewBuffer(nil)
 	for _, line := range snapshot {
@@ -1015,6 +1028,7 @@ func execRaftPropose(cluster *Cluster, c redis.Connection, args [][]byte) redis.
 func (raft *Raft) propose(e *logEntry) protocol.ErrorReply {
 	switch e.Event {
 	case eventNewNode:
+		// 二次check校验下是否已经存在了
 		raft.mu.Lock()
 		_, ok := raft.nodes[e.Addr]
 		raft.mu.Unlock()
@@ -1022,12 +1036,13 @@ func (raft *Raft) propose(e *logEntry) protocol.ErrorReply {
 			return protocol.MakeErrReply("node exists")
 		}
 	}
+	// 获取一个waitgroup（复用）
 	wg := wgPool.Get().(*sync.WaitGroup)
 	defer wgPool.Put(wg)
-	e.wg = wg
+	e.wg = wg /// 保存到 logEntry中
 	raft.mu.Lock()
 	raft.proposedIndex++
-	raft.log = append(raft.log, e)
+	raft.log = append(raft.log, e) // 加入到主节点的logEntry
 	raft.nodeIndexMap[raft.selfNodeID].receivedIndex = raft.proposedIndex
 	e.Term = raft.term
 	e.Index = raft.proposedIndex
@@ -1041,11 +1056,14 @@ func (raft *Raft) Join(seed string) protocol.ErrorReply {
 	cluster := raft.cluster
 
 	/* STEP1: get leader from seed */
-	seedCli, err := cluster.clientFactory.GetPeerClient(seed) // 随机从一个节点，获取 leader节点的地址
+
+	// 连接节点
+	seedCli, err := cluster.clientFactory.GetPeerClient(seed)
 	if err != nil {
 		return protocol.MakeErrReply("connect with seed failed: " + err.Error())
 	}
 	defer cluster.clientFactory.ReturnPeerClient(seed, seedCli)
+	// 发送 raft get-leader命令
 	ret := seedCli.Send(utils.ToCmdLine("raft", "get-leader"))
 	if protocol.IsErrorReply(ret) {
 		return ret.(protocol.ErrorReply)
@@ -1054,15 +1072,20 @@ func (raft *Raft) Join(seed string) protocol.ErrorReply {
 	if !ok || len(leaderInfo.Args) != 2 {
 		return protocol.MakeErrReply("ERR get-leader returns wrong reply")
 	}
-	leaderAddr := string(leaderInfo.Args[1]) // leader节点地址
+	// 获取leader节点地址
+	leaderAddr := string(leaderInfo.Args[1])
 
 	/* STEP2: join raft group */
+
+	// 再连接leader节点
 	leaderCli, err := cluster.clientFactory.GetPeerClient(leaderAddr)
 	if err != nil {
 		return protocol.MakeErrReply("connect with seed failed: " + err.Error())
 	}
 	defer cluster.clientFactory.ReturnPeerClient(leaderAddr, leaderCli)
-	ret = leaderCli.Send(utils.ToCmdLine("raft", "join", cluster.addr)) // 发送 raft join 命令，将当前节点申请加入 leader中
+
+	// 发送 raft join ip 命令，将当前节点申请加入 leader中
+	ret = leaderCli.Send(utils.ToCmdLine("raft", "join", cluster.addr))
 	if protocol.IsErrorReply(ret) {
 		return ret.(protocol.ErrorReply)
 	}
@@ -1072,11 +1095,14 @@ func (raft *Raft) Join(seed string) protocol.ErrorReply {
 	}
 	raft.mu.Lock()
 	defer raft.mu.Unlock()
+
+	// 这里获取到的就是，整个集群的快照信息
 	if errReply := raft.loadSnapshot(snapshot.Args); errReply != nil {
 		return errReply
 	}
 	cluster.self = raft.selfNodeID
-	raft.start(follower) // 作为follower启动
+	// 作为follower启动
+	raft.start(follower)
 	return nil
 }
 

@@ -4,6 +4,7 @@ package cluster
 
 import (
 	"errors"
+
 	"github.com/hdt3213/godis/interface/redis"
 	"github.com/hdt3213/godis/lib/logger"
 	"github.com/hdt3213/godis/lib/utils"
@@ -21,10 +22,13 @@ func (raft *Raft) applyLogEntries(entries []*logEntry) {
 	for _, entry := range entries {
 		switch entry.Event {
 		case eventNewNode:
+
+			// 创建新节点
 			node := &Node{
 				ID:   entry.NodeID,
 				Addr: entry.Addr,
 			}
+			// 保存新节点到nodes中
 			raft.nodes[node.ID] = node
 			if raft.state == leader {
 				raft.nodeIndexMap[entry.NodeID] = &nodeStatus{
@@ -33,19 +37,26 @@ func (raft *Raft) applyLogEntries(entries []*logEntry) {
 			}
 		case eventSetSlot:
 			for _, slotID := range entry.SlotIDs {
+				//raft.slots 表示所有的槽，通过槽id获取到槽对象
 				slot := raft.slots[slotID]
-				oldNode := raft.nodes[slot.NodeID]
+				oldNode := raft.nodes[slot.NodeID] // 看下该槽所属的旧节点
 				// remove from old oldNode
-				for i, s := range oldNode.Slots {
+				for i, s := range oldNode.Slots { // 查看旧节点下的所有的槽
 					if s.ID == slot.ID {
+						// 旧节点去掉该槽，（相当于将i+1开始的节点向左平移一位）
 						copy(oldNode.Slots[i:], oldNode.Slots[i+1:])
+						//切掉最后一个多余的节点
 						oldNode.Slots = oldNode.Slots[:len(oldNode.Slots)-1]
 						break
 					}
 				}
+				// 所属的新节点
 				newNodeID := entry.NodeID
+				// 将槽修改为新节点
 				slot.NodeID = newNodeID
 				// fixme: 多个节点同时加入后 re balance 时 newNode 可能为 nil
+
+				// 将槽加入到新节点的槽集合中
 				newNode := raft.nodes[slot.NodeID]
 				newNode.Slots = append(newNode.Slots, slot)
 			}
@@ -104,15 +115,18 @@ func execRaftJoin(cluster *Cluster, c redis.Connection, args [][]byte) redis.Rep
 		return protocol.MakeArgNumErrReply("raft join")
 	}
 	raft := cluster.asRaft()
+	// 当前节点不是主节点，不能执行join命令
 	if raft.state != leader {
 		leaderNode := raft.nodes[raft.leaderId]
 		return protocol.MakeErrReply("NOT LEADER " + leaderNode.ID + " " + leaderNode.Addr)
 	}
+
+	// 请求join命令的 节点id
 	addr := string(args[0])
 	nodeID := addr
 
 	raft.mu.RLock()
-	_, exist := raft.nodes[addr]
+	_, exist := raft.nodes[addr] // 节点id如果属于新节点
 	raft.mu.RUnlock()
 	// if node has joint cluster but terminated before persisting cluster config,
 	// it may try to join at next start.
@@ -128,6 +142,7 @@ func execRaftJoin(cluster *Cluster, c redis.Connection, args [][]byte) redis.Rep
 		}
 	}
 	raft.mu.RLock()
+	// 生成集群配置快照
 	snapshot := raft.makeSnapshotForFollower(nodeID)
 	raft.mu.RUnlock()
 	return protocol.MakeMultiBulkReply(snapshot)

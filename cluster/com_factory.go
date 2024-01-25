@@ -58,7 +58,7 @@ func (factory *defaultClientFactory) GetPeerClient(peerAddr string) (peerClient,
 			cli.Close()
 		}
 		connectionPool = pool.New(creator, finalizer, connectionPoolConfig)
-		factory.nodeConnections.Put(peerAddr, connectionPool)
+		factory.nodeConnections.Put(peerAddr, connectionPool) // each addr -> a client pool
 	} else {
 		connectionPool = raw.(*pool.Pool)
 	}
