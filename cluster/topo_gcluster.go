@@ -2,12 +2,13 @@ package cluster
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/hdt3213/godis/aof"
 	"github.com/hdt3213/godis/interface/redis"
 	"github.com/hdt3213/godis/lib/logger"
 	"github.com/hdt3213/godis/redis/protocol"
-	"strconv"
-	"strings"
 )
 
 func init() {
@@ -76,6 +77,7 @@ func execGClusterDonateSlot(cluster *Cluster, c redis.Connection, args [][]byte)
 	if limit <= 0 {
 		return protocol.MakeEmptyMultiBulkReply()
 	}
+	// 随机选择部分slot归属于新节点
 	result := make([][]byte, 0, limit)
 	// use the randomness of the for-each-in-map to randomly select slots
 	for slotID, slot := range cluster.slots {

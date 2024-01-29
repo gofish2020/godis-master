@@ -112,6 +112,8 @@ func MakeCluster() *Cluster {
 	} else {
 		err = cluster.Join(config.Properties.ClusterSeed)
 	}
+
+	
 	if err != nil {
 		panic(err)
 	}

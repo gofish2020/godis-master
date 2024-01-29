@@ -10,11 +10,11 @@ import (
 
 // Slot represents a hash slot,  used in cluster internal messages
 type Slot struct {
-	// ID is uint between 0 and 16383
+	// 槽ID
 	ID uint32
 	// NodeID is id of the hosting node
 	// If the slot is migrating, NodeID is the id of the node importing this slot (target node)
-	NodeID string
+	NodeID string // 节点ID
 	// Flags stores more information of slot
 	Flags uint32
 }

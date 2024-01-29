@@ -2,15 +2,17 @@ package cluster
 
 import (
 	"fmt"
+	"strconv"
+	"time"
+
 	"github.com/hdt3213/godis/database"
 	"github.com/hdt3213/godis/lib/logger"
 	"github.com/hdt3213/godis/lib/utils"
 	"github.com/hdt3213/godis/redis/connection"
 	"github.com/hdt3213/godis/redis/protocol"
-	"strconv"
-	"time"
 )
 
+// 当作为主节点启动的时候
 func (cluster *Cluster) startAsSeed(listenAddr string) protocol.ErrorReply {
 	err := cluster.topology.StartAsSeed(listenAddr)
 	if err != nil {
@@ -23,7 +25,10 @@ func (cluster *Cluster) startAsSeed(listenAddr string) protocol.ErrorReply {
 }
 
 // Join send `gcluster join` to node in cluster to join
+// seed就是配置文件中，配置的主服务节点ip地址
 func (cluster *Cluster) Join(seed string) protocol.ErrorReply {
+
+	// 将当前节点加入到集群中，同时将集群配置返回给当前节点（但是槽没有分配 ）
 	err := cluster.topology.Join(seed)
 	if err != nil {
 		return nil
@@ -55,16 +60,19 @@ func (cluster *Cluster) LoadConfig() protocol.ErrorReply {
 	return nil
 }
 
+// 分配当前节点的槽信息
 func (cluster *Cluster) reBalance() {
+	// 获取所有节点
 	nodes := cluster.topology.GetNodes()
 	var slotIDs []uint32
 	var slots []*Slot
 	reqDonateCmdLine := utils.ToCmdLine("gcluster", "request-donate", cluster.self)
 	for _, node := range nodes {
-		if node.ID == cluster.self {
+		if node.ID == cluster.self { // 除了自己
 			continue
 		}
 		node := node
+		// 连接每个节点
 		peerCli, err := cluster.clientFactory.GetPeerClient(node.Addr)
 		if err != nil {
 			logger.Errorf("get client of %s failed: %v", node.Addr, err)
@@ -99,7 +107,7 @@ func (cluster *Cluster) reBalance() {
 	logger.Infof("received %d donated slots", len(slots))
 
 	// change route
-	err := cluster.topology.SetSlot(slotIDs, cluster.self)
+	err := cluster.topology.SetSlot(slotIDs, cluster.self) // 节点上绑定槽
 	if err != nil {
 		logger.Errorf("set slot route failed: %v", err)
 		return

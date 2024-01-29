@@ -24,19 +24,19 @@ func registerPrepareFunc(cmdName string, fn CmdFunc) {
 
 // Transaction stores state and data for a try-commit-catch distributed transaction
 type Transaction struct {
-	id      string   // transaction id
-	cmdLine [][]byte // cmd cmdLine
-	cluster *Cluster
-	conn    redis.Connection
-	dbIndex int
+	id      string           // transaction id
+	cmdLine [][]byte         // redis命令
+	cluster *Cluster         // 集群对象
+	conn    redis.Connection // socket连接
+	dbIndex int              // 数据库索引
 
-	writeKeys  []string
-	readKeys   []string
-	keysLocked bool
-	undoLog    []CmdLine
+	writeKeys  []string  // 写key
+	readKeys   []string  // 读key
+	keysLocked bool      // 是否对写key/读key已经上锁
+	undoLog    []CmdLine // 回滚日志
 
-	status int8
-	mu     *sync.Mutex
+	status int8        // 事务状态
+	mu     *sync.Mutex // 事务锁（操作事务对象的时候上锁）
 }
 
 const (
@@ -92,7 +92,7 @@ func (tx *Transaction) prepare() error { // 上锁
 	// 获取命令中的key:比如 mset key value [key1 value1],得到的就是key/key1...
 	tx.writeKeys, tx.readKeys = database.GetRelatedKeys(tx.cmdLine)
 	// lock [writeKeys readKeys]
-	tx.lockKeys()
+	tx.lockKeys() // 对key上锁
 
 	for _, key := range tx.writeKeys {
 		err := tx.cluster.ensureKey(key)
@@ -109,10 +109,11 @@ func (tx *Transaction) prepare() error { // 上锁
 	// build undoLog
 	tx.undoLog = tx.cluster.db.GetUndoLogs(tx.dbIndex, tx.cmdLine) // 生成回滚日志
 	tx.status = preparedStatus
-	taskKey := genTaskKey(tx.id)
 
+	// 延迟任务
 	// 超时没有提交，自动回滚
-	timewheel.Delay(maxLockTime, taskKey, func() {
+	taskKey := genTaskKey(tx.id)
+	timewheel.Delay(maxLockTime, taskKey, func() { // 避免锁长时间的锁定
 		if tx.status == preparedStatus { // rollback transaction uncommitted until expire
 			logger.Info("abort transaction: " + tx.id)
 			tx.mu.Lock()
@@ -141,7 +142,7 @@ func (tx *Transaction) rollbackWithLock() error {
 	return nil
 }
 
-// cmdLine: Prepare id cmdName args...
+// 例如：Prepare trxid mset key value [key value ...]
 func execPrepare(cluster *Cluster, c redis.Connection, cmdLine CmdLine) redis.Reply {
 	if len(cmdLine) < 3 {
 		return protocol.MakeErrReply("ERR wrong number of arguments for 'prepare' command")
@@ -150,12 +151,14 @@ func execPrepare(cluster *Cluster, c redis.Connection, cmdLine CmdLine) redis.Re
 	txID := string(cmdLine[1])
 	cmdName := strings.ToLower(string(cmdLine[2]))
 
-	// 事务
+	// 创建事务
 	tx := NewTransaction(cluster, c, txID, cmdLine[2:])
+	// 存储事务对象
 	cluster.transactionMu.Lock()
 	cluster.transactions.Put(txID, tx)
 	cluster.transactionMu.Unlock()
-	err := tx.prepare() // 本质就是上锁
+
+	err := tx.prepare() // 本质就是上锁,生成回滚日志
 	if err != nil {
 		return protocol.MakeErrReply(err.Error())
 	}
@@ -172,6 +175,8 @@ func execRollback(cluster *Cluster, c redis.Connection, cmdLine CmdLine) redis.R
 		return protocol.MakeErrReply("ERR wrong number of arguments for 'rollback' command")
 	}
 	txID := string(cmdLine[1])
+
+	// 通过事务id，得到事务对象
 	cluster.transactionMu.RLock()
 	raw, ok := cluster.transactions.Get(txID)
 	cluster.transactionMu.RUnlock()
@@ -180,13 +185,15 @@ func execRollback(cluster *Cluster, c redis.Connection, cmdLine CmdLine) redis.R
 	}
 	tx, _ := raw.(*Transaction)
 
+	// 对事务对象上锁
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
+	// 执行回滚
 	err := tx.rollbackWithLock()
 	if err != nil {
 		return protocol.MakeErrReply(err.Error())
 	}
-	// clean transaction
+	// clean transaction（删除掉事务对象）
 	timewheel.Delay(waitBeforeCleanTx, "", func() {
 		cluster.transactionMu.Lock()
 		cluster.transactions.Remove(tx.id)
@@ -211,9 +218,11 @@ func execCommit(cluster *Cluster, c redis.Connection, cmdLine CmdLine) redis.Rep
 	}
 	tx, _ := raw.(*Transaction)
 
+	// 对事务对象上锁
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 
+	//tx.lockKeys()
 	// 执行命令
 	result := cluster.db.ExecWithLock(c, tx.cmdLine)
 
@@ -252,6 +261,8 @@ func requestCommit(cluster *Cluster, c redis.Connection, txID int64, groupMap ma
 		}
 		respList = append(respList, resp)
 	}
+
+	// 如果提交失败了，还是要执行回滚
 	if errReply != nil {
 		// 执行回滚
 		requestRollback(cluster, c, txID, groupMap)
@@ -266,7 +277,7 @@ func requestCommit(cluster *Cluster, c redis.Connection, txID int64, groupMap ma
 func requestRollback(cluster *Cluster, c redis.Connection, txID int64, groupMap map[string][]string) {
 	txIDStr := strconv.FormatInt(txID, 10)
 
-	// 表示对节点发送 回滚命令
+	// 对节点发送(对所有的节点）回滚命令
 	for node := range groupMap {
 		// rollback trxid
 		cluster.relay(node, c, makeArgs("rollback", txIDStr))

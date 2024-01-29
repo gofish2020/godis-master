@@ -60,35 +60,36 @@ func MSet(cluster *Cluster, c redis.Connection, cmdLine CmdLine) redis.Reply {
 		valueMap[keys[i]] = string(cmdLine[2*i+2])
 	}
 
-	// groupMap -> 【key：节点 value:关键词列表】
+	// groupMap -> 计算key分布在哪些节点上（ip -> keys)
 	groupMap := cluster.groupBy(keys)
-	if len(groupMap) == 1 && allowFastTransaction {
+	if len(groupMap) == 1 && allowFastTransaction { // 说明key都分布在同一个节点上
 
 		// 表示只有一个节点，（所有的keys都属于同一个节点）
 		for peer := range groupMap {
 
-			return cluster.relay(peer, c, modifyCmd(cmdLine, "MSet_")) // MSet_ key value [key value...]
+			return cluster.relay(peer, c, modifyCmd(cmdLine, "MSet_")) // 将 redis命令格式修改为 MSet_ key value [key value...]
 		}
 	}
 
 	//prepare
 	var errReply redis.Reply
-	// 事务id
+	// 生成 事务唯一id
 	txID := cluster.idGenerator.NextID()
 	txIDStr := strconv.FormatInt(txID, 10)
+
 	rollback := false
-	for peer, group := range groupMap {
+	for peer, group := range groupMap { // groupMap ip地址和key的分布
 
 		peerArgs := []string{txIDStr, "MSET"}
 
 		// group 表示多个key
+		// 组成 trxid mset key value [key value...]
 		for _, k := range group {
-			// 在同一个节点下的，key/value对
+
 			peerArgs = append(peerArgs, k, valueMap[k])
 		}
 
 		//peer 表示网络地址
-
 		// 构造出 prepare trxid mset key value[key value...]
 		resp := cluster.relay(peer, c, makeArgs("Prepare", peerArgs...))
 		if protocol.IsErrorReply(resp) {
@@ -106,9 +107,12 @@ func MSet(cluster *Cluster, c redis.Connection, cmdLine CmdLine) redis.Reply {
 		_, errReply = requestCommit(cluster, c, txID, groupMap)
 		rollback = errReply != nil
 	}
+
+	// 说明整个执行成功
 	if !rollback {
 		return &protocol.OkReply{}
 	}
+	// 说明整个执行失败
 	return errReply
 }
 

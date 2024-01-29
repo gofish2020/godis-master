@@ -111,15 +111,20 @@ func unmarshalNodes(args [][]byte) (map[string]*Node, error) {
 
 	// 每次的循环都是一个节点
 	for i, bin := range args {
-		payload := &nodePayload{}
+
+		// 解析节点
+		payload := &nodePayload{} // ID Addr SlotDesc Flags
 		err := json.Unmarshal(bin, payload)
 		if err != nil {
 			return nil, fmt.Errorf("unmarshal node failed at line %d: %v", i+1, err)
 		}
+		// 解析节点的槽信息
 		slotIds, err := unmarshalSlotIds(payload.SlotDesc)
 		if err != nil {
 			return nil, err
 		}
+
+		// 生成节点对象
 		node := &Node{
 			ID:    payload.ID,
 			Addr:  payload.Addr,
@@ -134,6 +139,8 @@ func unmarshalNodes(args [][]byte) (map[string]*Node, error) {
 				Flags:  0,
 			})
 		}
+
+		// 记录下整个节点map
 		nodeMap[node.ID] = node
 	}
 	return nodeMap, nil
@@ -142,15 +149,15 @@ func unmarshalNodes(args [][]byte) (map[string]*Node, error) {
 // genSnapshot
 // invoker provide lock
 func (raft *Raft) makeSnapshot() [][]byte {
-	topology := marshalNodes(raft.nodes)
+	topology := marshalNodes(raft.nodes) // 节点快照
 	snapshot := [][]byte{
-		[]byte(raft.selfNodeID),
-		[]byte(strconv.Itoa(int(raft.state))),
-		[]byte(raft.leaderId),
-		[]byte(strconv.Itoa(raft.term)),
-		[]byte(strconv.Itoa(raft.committedIndex)),
+		[]byte(raft.selfNodeID),                   // 0 当前节点id
+		[]byte(strconv.Itoa(int(raft.state))),     // 1 当前节点角色
+		[]byte(raft.leaderId),                     // 2 主节点id
+		[]byte(strconv.Itoa(raft.term)),           // 3 term
+		[]byte(strconv.Itoa(raft.committedIndex)), // 4
 	}
-	snapshot = append(snapshot, topology...)
+	snapshot = append(snapshot, topology...) // 5 集群节点快照（json 字符串）
 	return snapshot
 }
 
@@ -163,22 +170,20 @@ func (raft *Raft) makeSnapshotForFollower(followerId string) [][]byte {
 	return snapshot
 }
 
-// invoker provide with lock
-
-// nodeid state leaderid term commitIdx  jsonstring [jsonstring...]
+// 命令格式为：nodeid state leaderid term commitIdx  jsonstring [jsonstring...]
 func (raft *Raft) loadSnapshot(snapshot [][]byte) protocol.ErrorReply {
 	// make sure raft.slots and node.Slots is the same object
-	selfNodeId := string(snapshot[0])
+	selfNodeId := string(snapshot[0]) // 当前节点id
 	state0, err := strconv.Atoi(string(snapshot[1]))
 	if err != nil {
 		return protocol.MakeErrReply("illegal state: " + string(snapshot[1]))
 	}
-	state := raftState(state0)
+	state := raftState(state0) // 当前节点 角色
 	if _, ok := stateNames[state]; !ok {
 		return protocol.MakeErrReply("unknown state: " + strconv.Itoa(int(state)))
 	}
-	leaderId := string(snapshot[2])
-	term, err := strconv.Atoi(string(snapshot[3]))
+	leaderId := string(snapshot[2])                // 主节点id
+	term, err := strconv.Atoi(string(snapshot[3])) // term
 	if err != nil {
 		return protocol.MakeErrReply("illegal term: " + string(snapshot[3]))
 	}
@@ -186,30 +191,38 @@ func (raft *Raft) loadSnapshot(snapshot [][]byte) protocol.ErrorReply {
 	if err != nil {
 		return protocol.MakeErrReply("illegal commit index: " + string(snapshot[3]))
 	}
+
+	// 解析字符串获取，整个集群的节点配置信息（包括：每个节点下的槽的分布情况）
 	nodes, err := unmarshalNodes(snapshot[5:])
 	if err != nil {
 		return protocol.MakeErrReply(err.Error())
 	}
 
 	/*
-
-	 */
-	raft.selfNodeID = selfNodeId
-	raft.state = state
-	raft.leaderId = leaderId
-	raft.term = term
+		配置当前raft对象
+	*/
+	raft.selfNodeID = selfNodeId // 当前节点id
+	raft.state = state           // 当前节点角色
+	raft.leaderId = leaderId     // 主节点id
+	raft.term = term             // term
 	raft.committedIndex = commitIndex
 	raft.proposedIndex = commitIndex
 	raft.initLog(term, commitIndex, nil)
-	raft.slots = make([]*Slot, slotCount)
+	raft.slots = make([]*Slot, slotCount) //所有的槽
+
+	// 每个节点
 	for _, node := range nodes {
+
+		// 每个节点下的槽信息
 		for _, slot := range node.Slots {
-			raft.slots[int(slot.ID)] = slot
+			raft.slots[int(slot.ID)] = slot // raft.slots 中记录所有的槽和节点的映射关系
 		}
 		if node.getState() == leader {
 			raft.leaderId = node.ID
 		}
 	}
+
+	// 整个集群的节点情况
 	raft.nodes = nodes
 	return nil
 }
